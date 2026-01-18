@@ -84,4 +84,3 @@ The server uses `nodemon` for automatic restart on file changes during developme
    ```bash
    npm start
    ```
-# incubation-backend

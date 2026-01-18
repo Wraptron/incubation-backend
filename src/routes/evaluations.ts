@@ -63,7 +63,7 @@ router.get(
         reviewerId
       );
 
-      const { data, error } = await supabase
+      const { data: evaluation, error } = await supabase
         .from("application_evaluations")
         .select("*")
         .eq("application_id", applicationId)
@@ -80,6 +80,22 @@ router.get(
           details: error.message,
         });
       }
+
+      // Fetch reviewer information separately
+      let reviewer = null;
+      if (evaluation && evaluation.reviewer_id) {
+        const { data: reviewerData } = await supabase
+          .from("user_profiles")
+          .select("id, full_name")
+          .eq("id", evaluation.reviewer_id)
+          .single();
+        
+        if (reviewerData) {
+          reviewer = reviewerData;
+        }
+      }
+
+      const data = evaluation ? { ...evaluation, reviewer } : null;
 
       return res.json({ evaluation: data });
     } catch (error) {
@@ -98,32 +114,73 @@ router.get(
     try {
       const { applicationId } = req.params;
 
-      const { data, error } = await supabase
+      // Validate applicationId
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (
+        !applicationId ||
+        applicationId === "undefined" ||
+        !uuidRegex.test(applicationId)
+      ) {
+        return res.status(400).json({
+          error: "Invalid application ID",
+          received: applicationId,
+        });
+      }
+
+      console.log("Fetching all evaluations for application:", applicationId);
+
+      const { data: evaluations, error } = await supabase
         .from("application_evaluations")
-        .select(
-          `
-        *,
-        reviewer:user_profiles!application_evaluations_reviewer_id_fkey(
-          id,
-          full_name
-        )
-      `
-        )
+        .select("*")
         .eq("application_id", applicationId)
         .order("created_at", { ascending: false });
 
       if (error) {
+        console.error("Supabase error fetching evaluations:", error);
         return res.status(500).json({
           error: "Failed to fetch evaluations",
           details: error.message,
         });
       }
 
-      return res.json({ evaluations: data || [] });
-    } catch (error) {
+      // Fetch reviewer information for all evaluations
+      let enrichedEvaluations = evaluations || [];
+      if (enrichedEvaluations.length > 0) {
+        const reviewerIds = [
+          ...new Set(enrichedEvaluations.map((e: any) => e.reviewer_id)),
+        ];
+
+        const { data: reviewerData } = await supabase
+          .from("user_profiles")
+          .select("id, full_name")
+          .in("id", reviewerIds);
+
+        // Create a map of reviewer_id to reviewer info
+        const reviewersMap: Record<string, { id: string; full_name: string | null }> = {};
+        if (reviewerData) {
+          reviewerData.forEach((reviewer) => {
+            reviewersMap[reviewer.id] = {
+              id: reviewer.id,
+              full_name: reviewer.full_name,
+            };
+          });
+        }
+
+        // Enrich evaluations with reviewer information
+        enrichedEvaluations = enrichedEvaluations.map((evaluation: any) => ({
+          ...evaluation,
+          reviewer: reviewersMap[evaluation.reviewer_id] || null,
+        }));
+      }
+
+      console.log(`Found ${enrichedEvaluations.length} evaluations`);
+      return res.json({ evaluations: enrichedEvaluations });
+    } catch (error: any) {
       console.error("Error fetching evaluations:", error);
       return res.status(500).json({
         error: "Failed to fetch evaluations",
+        details: error?.message || "Unknown error",
       });
     }
   }

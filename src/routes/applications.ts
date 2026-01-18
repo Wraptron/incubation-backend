@@ -238,9 +238,14 @@ router.get("/:id", async (req: Request, res: Response) => {
       .eq("application_id", id);
 
     let reviewers: Array<{ id: string; full_name: string | null }> = [];
+    let allEvaluationsComplete = false;
+    let evaluationsCount = 0;
+    let totalReviewers = 0;
 
     if (reviewerAssignments && reviewerAssignments.length > 0) {
       const reviewerIds = reviewerAssignments.map((ar: any) => ar.reviewer_id);
+      totalReviewers = reviewerIds.length;
+
       const { data: reviewerData } = await supabase
         .from("user_profiles")
         .select("id, full_name")
@@ -252,12 +257,29 @@ router.get("/:id", async (req: Request, res: Response) => {
           full_name: reviewer.full_name,
         }));
       }
+
+      // Check if all reviewers have submitted evaluations
+      const { data: evaluations } = await supabase
+        .from("application_evaluations")
+        .select("reviewer_id")
+        .eq("application_id", id);
+
+      const evaluatedReviewerIds = evaluations
+        ? evaluations.map((e: any) => e.reviewer_id)
+        : [];
+      evaluationsCount = evaluatedReviewerIds.length;
+      allEvaluationsComplete =
+        reviewerIds.length > 0 &&
+        reviewerIds.every((id) => evaluatedReviewerIds.includes(id));
     }
 
     return res.json({
       application: {
         ...data,
         reviewers,
+        allEvaluationsComplete,
+        evaluationsCount,
+        totalReviewers,
       },
     });
   } catch (error) {
@@ -276,7 +298,7 @@ router.put("/:id", async (req: Request, res: Response) => {
 
     const updateData: any = {};
 
-    // Only allow status updates for now (managers/reviewers)
+    // Handle status updates
     if (body.status) {
       const validStatuses = [
         "pending",
@@ -291,7 +313,36 @@ router.put("/:id", async (req: Request, res: Response) => {
         });
       }
       updateData.status = body.status;
+
+      // Handle rejection reason - required when rejecting
+      if (body.status === "rejected") {
+        if (!body.rejectionReason || body.rejectionReason.trim() === "") {
+          return res.status(400).json({
+            error: "Rejection reason is required when rejecting an application",
+          });
+        }
+        updateData.rejection_reason = body.rejectionReason.trim();
+      } else {
+        // Clear rejection reason if status is not rejected
+        updateData.rejection_reason = null;
+      }
     }
+
+    // Handle rejection reason separately (in case status update is not included)
+    if (body.rejectionReason !== undefined) {
+      if (body.status === "rejected" || updateData.status === "rejected") {
+        updateData.rejection_reason = body.rejectionReason.trim() || null;
+      }
+    }
+
+    // Get current application status to check if we need to auto-transition
+    const { data: currentApp } = await supabase
+      .from("startup_applications")
+      .select("status")
+      .eq("id", id)
+      .single();
+
+    const currentStatus = currentApp?.status || "pending";
 
     // Handle multiple reviewer assignments (up to 5)
     if (body.reviewerIds !== undefined) {
@@ -331,6 +382,11 @@ router.put("/:id", async (req: Request, res: Response) => {
                 error: "Failed to assign reviewers",
                 details: assignError.message,
               });
+            }
+
+            // Auto-transition from pending to under_review when reviewers are assigned
+            if (currentStatus === "pending" && !body.status) {
+              updateData.status = "under_review";
             }
           }
         }
@@ -448,12 +504,38 @@ router.put("/:id", async (req: Request, res: Response) => {
           full_name: reviewer.full_name,
         }));
       }
+
+      // Check if all reviewers have submitted evaluations
+      const { data: evaluations } = await supabase
+        .from("application_evaluations")
+        .select("reviewer_id")
+        .eq("application_id", id);
+
+      const evaluatedReviewerIds = evaluations
+        ? evaluations.map((e: any) => e.reviewer_id)
+        : [];
+      const allEvaluationsComplete =
+        reviewerIds.length > 0 &&
+        reviewerIds.every((id) => evaluatedReviewerIds.includes(id));
+
+      return res.json({
+        application: {
+          ...data,
+          reviewers,
+          allEvaluationsComplete,
+          evaluationsCount: evaluatedReviewerIds.length,
+          totalReviewers: reviewerIds.length,
+        },
+      });
     }
 
     return res.json({
       application: {
         ...data,
         reviewers,
+        allEvaluationsComplete: false,
+        evaluationsCount: 0,
+        totalReviewers: 0,
       },
     });
   } catch (error) {
