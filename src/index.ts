@@ -10,7 +10,13 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+// Restrict CORS to known frontend origins
+app.use(
+  cors({
+    origin: ["http://65.1.107.13:5000", "http://localhost:3000"],
+    credentials: true,
+  })
+);
 // Increase body size limit to 50MB to handle file uploads (base64 encoded)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
