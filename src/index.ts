@@ -7,7 +7,7 @@ import evaluationsRouter from "./routes/evaluations";
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT) || 5000;
+const PORT = Number(process.env.PORT) ||5001;
 
 // Middleware
 // Restrict CORS to known frontend origins
