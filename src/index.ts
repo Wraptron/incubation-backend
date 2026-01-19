@@ -14,11 +14,9 @@ const PORT = process.env.PORT || 5000;
 app.use(
   cors({
     origin: [
-      "http://13.126.35.2:3000", // deployed frontend
-      "http://65.1.107.13:5000", // previous deployed host (if used)
-      "http://localhost:3000",
+      'http://localhost:3000',
+      'http://13.126.35.2:3000',
     ],
-    credentials: true,
   })
 );
 // Increase body size limit to 50MB to handle file uploads (base64 encoded)
