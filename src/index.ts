@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import applicationsRouter from "./routes/applications";
 import evaluationsRouter from "./routes/evaluations";
+import usersRouter from "./routes/users";
 
 dotenv.config();
 
@@ -27,9 +28,11 @@ app.get("/api", (req: Request, res: Response) => {
 
 app.use("/api/applications", applicationsRouter);
 app.use("/api/evaluations", evaluationsRouter);
+app.use("/api/users", usersRouter);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server is running on http://0.0.0.0:${PORT}`);
   console.log(`📝 Health check: http://13.126.35.2:${PORT}/health`);
   console.log(`📋 Applications API: http://13.126.35.2:${PORT}/api/applications`);
+  console.log(`👥 Users API: http://13.126.35.2:${PORT}/api/users`);
 });
