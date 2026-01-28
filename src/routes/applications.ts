@@ -10,18 +10,36 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     const body = req.body;
 
+    // Validate required fields based on database schema
     const requiredFields = [
-      "companyName",
-      "founderName",
       "email",
-      "phone",
-      "description",
-      "problem",
-      "solution",
-      "targetMarket",
-      "businessModel",
-      "fundingStage",
-      "whyIncubator",
+      "teamName",
+      "yourName",
+      "isIITM",
+      "rollNumber",
+      "phoneNumber",
+      "channel",
+      "coFoundersCount",
+      "priorEntrepreneurshipExperience",
+      "teamPriorEntrepreneurshipExperience",
+      "mcaRegistered",
+      "teamMembers",
+      "nirmaanCanHelp",
+      "preIncubationReason",
+      "heardAboutStartups",
+      "heardAboutNirmaan",
+      "problemSolving",
+      "yourSolution",
+      "solutionType",
+      "targetIndustry",
+      "startupStage",
+      "hasIntellectualProperty",
+      "hasPotentialIntellectualProperty",
+      "nirmaanPresentationLink",
+      "hasProofOfConcept",
+      "hasPatentsOrPapers",
+      "seedFundUtilizationPlan",
+      "pitchVideoLink",
     ];
 
     for (const field of requiredFields) {
@@ -32,34 +50,96 @@ router.post("/", async (req: Request, res: Response) => {
       }
     }
 
-    const fundingStageMap: Record<string, string> = {
-      "pre-seed": "pre_seed",
-      seed: "seed",
-      "series-a": "series_a",
-      "series-b": "series_b",
-      "series-c+": "series_c_plus",
-      bootstrapped: "bootstrapped",
-    };
+    // Parse JSONB fields if needed
+    let otherIndustries = body.otherIndustries || [];
+    if (typeof otherIndustries === 'string') {
+      try {
+        otherIndustries = JSON.parse(otherIndustries);
+      } catch {
+        otherIndustries = [];
+      }
+    }
+    
+    let technologiesUtilized = body.technologiesUtilized || [];
+    if (typeof technologiesUtilized === 'string') {
+      try {
+        technologiesUtilized = JSON.parse(technologiesUtilized);
+      } catch {
+        technologiesUtilized = [];
+      }
+    }
 
     const { data, error } = await supabase
-      .from("startup_applications")
+      .from("new_application")
       .insert({
-        user_id: null,
-        company_name: body.companyName,
-        website: body.website || null,
-        description: body.description,
-        founder_name: body.founderName,
-        co_founders: body.coFounders || null,
+        // Basic Information
         email: body.email,
-        phone: body.phone,
-        problem: body.problem,
-        solution: body.solution,
-        target_market: body.targetMarket,
-        business_model: body.businessModel,
-        funding_stage: fundingStageMap[body.fundingStage] || null,
-        funding_amount: body.fundingAmount || null,
-        current_traction: body.currentTraction || null,
-        why_incubator: body.whyIncubator,
+        team_name: body.teamName,
+        your_name: body.yourName,
+        is_iitm: body.isIITM,
+        roll_number: body.rollNumber,
+        roll_number_other: body.rollNumberOther || null,
+        college_name: body.collegeName || null,
+        current_occupation: body.currentOccupation || null,
+        phone_number: body.phoneNumber,
+        channel: body.channel,
+        channel_other: body.channelOther || null,
+        co_founders_count: parseInt(body.coFoundersCount),
+        faculty_involved: body.facultyInvolved || null,
+
+        // Entrepreneurship Experience
+        prior_entrepreneurship_experience: body.priorEntrepreneurshipExperience,
+        team_prior_entrepreneurship_experience: body.teamPriorEntrepreneurshipExperience,
+        prior_experience_details: body.priorExperienceDetails || null,
+
+        // Startup Registration & Funding
+        mca_registered: body.mcaRegistered,
+        dpiit_registered: body.dpiitRegistered || null,
+        dpiit_details: body.dpiitDetails || null,
+        external_funding: body.externalFunding || null,
+        currently_incubated: body.currentlyIncubated || null,
+
+        // Team Members
+        team_members: body.teamMembers,
+
+        // About Nirmaan Program
+        nirmaan_can_help: body.nirmaanCanHelp,
+        pre_incubation_reason: body.preIncubationReason,
+        heard_about_startups: body.heardAboutStartups,
+        heard_about_nirmaan: body.heardAboutNirmaan,
+
+        // Problem & Solution
+        problem_solving: body.problemSolving,
+        your_solution: body.yourSolution,
+        solution_type: body.solutionType,
+
+        // Industry & Technologies
+        target_industry: body.targetIndustry,
+        other_industries: otherIndustries,
+        industry_other: body.industryOther || null,
+        other_industries_other: body.otherIndustriesOther || null,
+        technologies_utilized: technologiesUtilized,
+        other_technology_details: body.otherTechnologyDetails || null,
+
+        // Startup Stage & IP
+        startup_stage: body.startupStage,
+        has_intellectual_property: body.hasIntellectualProperty,
+        has_potential_intellectual_property: body.hasPotentialIntellectualProperty,
+
+        // Presentation & Proof
+        nirmaan_presentation_link: body.nirmaanPresentationLink,
+        has_proof_of_concept: body.hasProofOfConcept,
+        proof_of_concept_details: body.proofOfConceptDetails || null,
+        has_patents_or_papers: body.hasPatentsOrPapers,
+        patents_or_papers_details: body.patentsOrPapersDetails || null,
+
+        // Seed Fund & Pitch
+        seed_fund_utilization_plan: body.seedFundUtilizationPlan,
+        pitch_video_link: body.pitchVideoLink,
+        document1_link: body.document1Link || null,
+        document2_link: body.document2Link || null,
+
+        // Status
         status: "pending",
       })
       .select()
@@ -98,9 +178,9 @@ router.get("/", async (req: Request, res: Response) => {
     const offset = Number(req.query.offset ?? 0);
 
     let query = supabase
-      .from("startup_applications")
+      .from("new_application")
       .select("*")
-      .order("created_at", { ascending: false })
+      .order("submitted_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
     if (status) {
@@ -146,13 +226,20 @@ router.get("/", async (req: Request, res: Response) => {
       }
     }
 
+    // Map new_application fields to old field names for frontend compatibility
     const enriched = data.map(app => ({
       ...app,
+      company_name: app.team_name || app.company_name,
+      founder_name: app.your_name || app.founder_name,
+      phone: app.phone_number || app.phone,
+      problem: app.problem_solving || app.problem,
+      solution: app.your_solution || app.solution,
+      created_at: app.submitted_at || app.created_at,
       reviewers: reviewersMap[app.id] || [],
     }));
 
     const { count } = await supabase
-      .from("startup_applications")
+      .from("new_application")
       .select("*", { count: "exact", head: true });
 
     return res.json({
@@ -177,7 +264,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     const { id } = req.params;
 
     const { data, error } = await supabase
-      .from("startup_applications")
+      .from("new_application")
       .select("*")
       .eq("id", id)
       .single();
@@ -186,7 +273,34 @@ router.get("/:id", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Application not found" });
     }
 
-    return res.json({ application: data });
+    // Map new_application fields to old field names for frontend compatibility
+    const mappedApplication = {
+      ...data,
+      // Basic mappings
+      company_name: data.team_name || data.company_name,
+      founder_name: data.your_name || data.founder_name,
+      phone: data.phone_number || data.phone,
+      created_at: data.submitted_at || data.created_at,
+      
+      // Content mappings
+      problem: data.problem_solving || data.problem,
+      solution: data.your_solution || data.solution,
+      description: data.your_solution || data.problem_solving || data.description,
+      
+      // Business mappings
+      target_market: data.target_industry || data.target_market,
+      business_model: data.solution_type || data.business_model,
+      current_traction: data.proof_of_concept_details || data.current_traction,
+      why_incubator: data.nirmaan_can_help || data.pre_incubation_reason || data.why_incubator,
+      funding_amount: data.external_funding || data.funding_amount,
+      
+      // Additional fields with fallbacks
+      website: data.website || null,
+      co_founders: data.faculty_involved || data.co_founders || null,
+      funding_stage: data.funding_stage || null,
+    };
+
+    return res.json({ application: mappedApplication });
   } catch (error) {
     console.error("GET by ID error:", error);
     return res.status(500).json({ error: "Failed to fetch application" });
