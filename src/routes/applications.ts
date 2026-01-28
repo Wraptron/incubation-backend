@@ -43,7 +43,22 @@ router.post("/", async (req: Request, res: Response) => {
     ];
 
     for (const field of requiredFields) {
-      if (!body[field] || String(body[field]).trim() === "") {
+      // Special handling for array fields
+      if (field === 'teamMembers') {
+        let teamMembersValue = body[field];
+        if (typeof teamMembersValue === 'string') {
+          try {
+            teamMembersValue = JSON.parse(teamMembersValue);
+          } catch {
+            teamMembersValue = [];
+          }
+        }
+        if (!Array.isArray(teamMembersValue) || teamMembersValue.length === 0) {
+          return res.status(400).json({
+            error: `Missing required field: ${field}. At least one team member is required.`,
+          });
+        }
+      } else if (!body[field] || String(body[field]).trim() === "") {
         return res.status(400).json({
           error: `Missing required field: ${field}`,
         });
@@ -69,6 +84,57 @@ router.post("/", async (req: Request, res: Response) => {
       }
     }
 
+    let facultyInvolved = body.facultyInvolved;
+    if (typeof facultyInvolved === 'string') {
+      try {
+        facultyInvolved = JSON.parse(facultyInvolved);
+        // If empty array, set to "NA" string as per requirement
+        if (Array.isArray(facultyInvolved) && facultyInvolved.length === 0) {
+          facultyInvolved = "NA";
+        }
+      } catch {
+        facultyInvolved = "NA";
+      }
+    }
+    // If it's already an array but empty, set to "NA"
+    if (Array.isArray(facultyInvolved) && facultyInvolved.length === 0) {
+      facultyInvolved = "NA";
+    }
+    // If undefined or null, set to "NA"
+    if (!facultyInvolved) {
+      facultyInvolved = "NA";
+    }
+
+    let teamMembers = body.teamMembers;
+    if (typeof teamMembers === 'string') {
+      try {
+        teamMembers = JSON.parse(teamMembers);
+      } catch {
+        teamMembers = [];
+      }
+    }
+    // Ensure it's an array
+    if (!Array.isArray(teamMembers)) {
+      teamMembers = [];
+    }
+
+    let externalFunding = body.externalFunding;
+    if (typeof externalFunding === 'string') {
+      try {
+        externalFunding = JSON.parse(externalFunding);
+      } catch {
+        externalFunding = [];
+      }
+    }
+    // Ensure it's an array
+    if (!Array.isArray(externalFunding)) {
+      externalFunding = [];
+    }
+    // If empty array, set to null
+    if (Array.isArray(externalFunding) && externalFunding.length === 0) {
+      externalFunding = null;
+    }
+
     const { data, error } = await supabase
       .from("new_application")
       .insert({
@@ -85,7 +151,7 @@ router.post("/", async (req: Request, res: Response) => {
         channel: body.channel,
         channel_other: body.channelOther || null,
         co_founders_count: parseInt(body.coFoundersCount),
-        faculty_involved: body.facultyInvolved || null,
+        faculty_involved: facultyInvolved || "NA",
 
         // Entrepreneurship Experience
         prior_entrepreneurship_experience: body.priorEntrepreneurshipExperience,
@@ -96,11 +162,11 @@ router.post("/", async (req: Request, res: Response) => {
         mca_registered: body.mcaRegistered,
         dpiit_registered: body.dpiitRegistered || null,
         dpiit_details: body.dpiitDetails || null,
-        external_funding: body.externalFunding || null,
+        external_funding: externalFunding || null,
         currently_incubated: body.currentlyIncubated || null,
 
         // Team Members
-        team_members: body.teamMembers,
+        team_members: teamMembers,
 
         // About Nirmaan Program
         nirmaan_can_help: body.nirmaanCanHelp,
@@ -112,6 +178,7 @@ router.post("/", async (req: Request, res: Response) => {
         problem_solving: body.problemSolving,
         your_solution: body.yourSolution,
         solution_type: body.solutionType,
+        solution_type_other: body.solutionTypeOther || null,
 
         // Industry & Technologies
         target_industry: body.targetIndustry,
@@ -125,6 +192,8 @@ router.post("/", async (req: Request, res: Response) => {
         startup_stage: body.startupStage,
         has_intellectual_property: body.hasIntellectualProperty,
         has_potential_intellectual_property: body.hasPotentialIntellectualProperty,
+        ip_file_link: body.ipFileLink || null,
+        potential_ip_file_link: body.potentialIpFileLink || null,
 
         // Presentation & Proof
         nirmaan_presentation_link: body.nirmaanPresentationLink,
