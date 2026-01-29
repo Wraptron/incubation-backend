@@ -9,11 +9,14 @@ dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
-app.use(
-  cors({
-    origin: ["http://13.126.35.2:3000", "http://localhost:3000"],
-  })
-);
+
+// CORS: allow local + prod frontend. Set FRONTEND_URL or CORS_ORIGINS in prod.
+const corsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
+  : process.env.FRONTEND_URL
+    ? [process.env.FRONTEND_URL, "http://localhost:3000"]
+    : ["http://13.126.35.2:3000", "http://localhost:3000", "http://65.1.107.13:3000"];
+app.use(cors({ origin: corsOrigins }));
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
