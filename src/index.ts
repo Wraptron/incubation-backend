@@ -1,17 +1,39 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import path from "path";
 import applicationsRouter from "./routes/applications";
 import evaluationsRouter from "./routes/evaluations";
 import usersRouter from "./routes/users";
 
-dotenv.config();
+// Load environment-specific .env file
+const env = process.env.NODE_ENV || "development";
+const envFile = `.env.${env}`;
+const envPath = path.resolve(process.cwd(), envFile);
+
+// Try to load environment-specific file, fallback to .env
+dotenv.config({ path: envPath });
+dotenv.config(); // Fallback to .env if env-specific file doesn't exist
+
+console.log(`🌍 Environment: ${env}`);
+console.log(`📄 Loading env from: ${envPath}`);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
+// CORS configuration based on environment
+const allowedOrigins =
+  env === "production"
+    ? [process.env.FRONTEND_URL || "http://13.126.35.2:3000"]
+    : env === "staging"
+    ? [
+        process.env.FRONTEND_URL || "http://your-staging-frontend-url:3000",
+        "http://localhost:3000",
+      ]
+    : ["http://localhost:3000", "http://127.0.0.1:3000"];
+
 app.use(
   cors({
-    origin: ["http://13.126.35.2:3000", "http://localhost:3000"],
+    origin: allowedOrigins,
   })
 );
 
@@ -30,9 +52,18 @@ app.use("/api/applications", applicationsRouter);
 app.use("/api/evaluations", evaluationsRouter);
 app.use("/api/users", usersRouter);
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server is running on http://0.0.0.0:${PORT}`);
-  console.log(`📝 Health check: http://13.126.35.2:${PORT}/health`);
-  console.log(`📋 Applications API: http://13.126.35.2:${PORT}/api/applications`);
-  console.log(`👥 Users API: http://13.126.35.2:${PORT}/api/users`);
+const host = env === "production" ? "0.0.0.0" : "0.0.0.0";
+const baseUrl =
+  env === "production"
+    ? process.env.BACKEND_URL || `http://13.126.35.2:${PORT}`
+    : env === "staging"
+    ? process.env.BACKEND_URL || `http://your-staging-backend-url:${PORT}`
+    : `http://localhost:${PORT}`;
+
+app.listen(PORT, host, () => {
+  console.log(`🚀 Server is running on http://${host}:${PORT}`);
+  console.log(`🌍 Environment: ${env}`);
+  console.log(`📝 Health check: ${baseUrl}/health`);
+  console.log(`📋 Applications API: ${baseUrl}/api/applications`);
+  console.log(`👥 Users API: ${baseUrl}/api/users`);
 });

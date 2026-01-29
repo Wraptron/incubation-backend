@@ -22,3 +22,11 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Environment files (keep .env.example)
+.env
+.env.local
+.env.development
+.env.staging
+.env.production
+.env.*.local
