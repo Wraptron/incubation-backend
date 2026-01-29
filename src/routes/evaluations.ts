@@ -3,6 +3,38 @@ import { supabase } from "../lib/supabase";
 
 const router = Router();
 
+// Log every request to this router (so we can confirm backend is hit)
+router.use((req, _res, next) => {
+  console.log(`[Backend] Evaluations request: ${req.method} ${req.originalUrl || req.url}`);
+  next();
+});
+
+const uuidRegex =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Send a consistent error response */
+function sendError(
+  res: Response,
+  status: number,
+  error: string,
+  details?: string,
+  code?: string
+) {
+  const payload: { error: string; details?: string; code?: string } = {
+    error,
+  };
+  if (details) payload.details = details;
+  if (code) payload.code = code;
+  return res.status(status).json(payload);
+}
+
+/** Safely get error message from unknown error */
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "An unexpected error occurred";
+}
+
 // GET /api/evaluations/application/:applicationId - Get evaluation for a specific application by current reviewer
 router.get(
   "/application/:applicationId",
@@ -20,9 +52,6 @@ router.get(
       const { applicationId } = req.params;
 
       // Validate applicationId
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
       if (
         !applicationId ||
         applicationId === "undefined" ||
@@ -30,11 +59,7 @@ router.get(
         !uuidRegex.test(applicationId)
       ) {
         console.error("Invalid applicationId:", applicationId);
-        return res.status(400).json({
-          error: "Invalid application ID",
-          details: "Application ID must be a valid UUID",
-          received: applicationId,
-        });
+        return sendError(res, 400, "Invalid application ID", "Application ID must be a valid UUID");
       }
 
       // Validate reviewerId from headers
@@ -49,11 +74,7 @@ router.get(
         !uuidRegex.test(reviewerId)
       ) {
         console.error("Invalid reviewer ID:", reviewerIdHeader);
-        return res.status(401).json({
-          error: "Reviewer ID is required",
-          details: "x-reviewer-id header is missing or invalid",
-          received: reviewerIdHeader,
-        });
+        return sendError(res, 401, "Reviewer ID is required", "x-reviewer-id header is missing or invalid");
       }
 
       console.log(
@@ -75,10 +96,7 @@ router.get(
           // No evaluation found yet
           return res.json({ evaluation: null });
         }
-        return res.status(500).json({
-          error: "Failed to fetch evaluation",
-          details: error.message,
-        });
+        return sendError(res, 500, "Failed to fetch evaluation", error.message, error.code);
       }
 
       // Fetch reviewer information separately
@@ -98,11 +116,9 @@ router.get(
       const data = evaluation ? { ...evaluation, reviewer } : null;
 
       return res.json({ evaluation: data });
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Error fetching evaluation:", error);
-      return res.status(500).json({
-        error: "Failed to fetch evaluation",
-      });
+      return sendError(res, 500, "Failed to fetch evaluation", getErrorMessage(error));
     }
   }
 );
@@ -115,17 +131,12 @@ router.get(
       const { applicationId } = req.params;
 
       // Validate applicationId
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (
         !applicationId ||
         applicationId === "undefined" ||
         !uuidRegex.test(applicationId)
       ) {
-        return res.status(400).json({
-          error: "Invalid application ID",
-          received: applicationId,
-        });
+        return sendError(res, 400, "Invalid application ID", "Application ID must be a valid UUID");
       }
 
       console.log("Fetching all evaluations for application:", applicationId);
@@ -138,10 +149,7 @@ router.get(
 
       if (error) {
         console.error("Supabase error fetching evaluations:", error);
-        return res.status(500).json({
-          error: "Failed to fetch evaluations",
-          details: error.message,
-        });
+        return sendError(res, 500, "Failed to fetch evaluations", error.message, error.code);
       }
 
       // Fetch reviewer information for all evaluations
@@ -176,12 +184,9 @@ router.get(
 
       console.log(`Found ${enrichedEvaluations.length} evaluations`);
       return res.json({ evaluations: enrichedEvaluations });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error fetching evaluations:", error);
-      return res.status(500).json({
-        error: "Failed to fetch evaluations",
-        details: error?.message || "Unknown error",
-      });
+      return sendError(res, 500, "Failed to fetch evaluations", getErrorMessage(error));
     }
   }
 );
@@ -191,6 +196,16 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     const body = req.body;
 
+    // Validate request body
+    if (!body || typeof body !== "object") {
+      return sendError(
+        res,
+        400,
+        "Invalid request body",
+        "Request body must be a JSON object"
+      );
+    }
+
     // Try multiple header formats (Express normalizes headers)
     const reviewerId =
       (req.headers["x-reviewer-id"] as string) ||
@@ -198,10 +213,27 @@ router.post("/", async (req: Request, res: Response) => {
       (req.headers["X-REVIEWER-ID"] as string);
 
     if (!reviewerId || reviewerId === "undefined") {
-      return res.status(401).json({
-        error: "Reviewer ID is required",
-        details: "x-reviewer-id header is missing or invalid",
-      });
+      return sendError(
+        res,
+        401,
+        "Reviewer ID is required",
+        "x-reviewer-id header is missing or invalid"
+      );
+    }
+
+    if (!uuidRegex.test(reviewerId)) {
+      return sendError(res, 401, "Invalid reviewer ID", "x-reviewer-id must be a valid UUID");
+    }
+
+    // Validate applicationId
+    const applicationId = body.applicationId;
+    if (!applicationId || !uuidRegex.test(applicationId)) {
+      return sendError(
+        res,
+        400,
+        "Invalid application ID",
+        "applicationId must be a valid UUID"
+      );
     }
 
     // Validate required fields
@@ -216,13 +248,14 @@ router.post("/", async (req: Request, res: Response) => {
 
     for (const field of requiredFields) {
       if (body[field] === undefined || body[field] === null) {
-        return res.status(400).json({
-          error: `Missing required field: ${field}`,
-        });
+        return sendError(res, 400, `Missing required field: ${field}`);
+      }
+      if (field !== "applicationId" && String(body[field]).trim() === "") {
+        return sendError(res, 400, `Score field cannot be empty: ${field}`);
       }
     }
 
-    // Validate scores are between 0 and 10
+    // Validate scores are between 0 and 10 (allow decimals)
     const scores = [
       body.needScore,
       body.noveltyScore,
@@ -232,10 +265,14 @@ router.post("/", async (req: Request, res: Response) => {
     ];
 
     for (const score of scores) {
-      if (score < 0 || score > 10) {
-        return res.status(400).json({
-          error: "All scores must be between 0 and 10",
-        });
+      const numScore = typeof score === "string" ? parseFloat(score) : Number(score);
+      if (isNaN(numScore) || numScore < 0 || numScore > 10) {
+        return sendError(res, 400, "All scores must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+      }
+      const scoreStr = String(score);
+      const decimalParts = scoreStr.split(".");
+      if (decimalParts.length === 2 && decimalParts[1].length > 2) {
+        return sendError(res, 400, "Scores can have at most 2 decimal places");
       }
     }
 
@@ -249,66 +286,113 @@ router.post("/", async (req: Request, res: Response) => {
 
     if (assignmentError) {
       console.error("Error checking reviewer assignment:", assignmentError);
-      return res.status(500).json({
-        error: "Failed to verify reviewer assignment",
-        details: assignmentError.message,
-      });
+      return sendError(
+        res,
+        500,
+        "Failed to verify reviewer assignment",
+        assignmentError.message,
+        assignmentError.code
+      );
     }
 
     if (!assignment) {
-      return res.status(403).json({
-        error: "You are not assigned to review this application",
-      });
+      return sendError(
+        res,
+        403,
+        "You are not assigned to review this application"
+      );
     }
 
-    // Insert evaluation
+    // Parse scores as decimals (no rounding). Use original string when possible so decimals (e.g. 9.44) are never lost.
+    const parseScore = (score: string | number): number => {
+      const num = typeof score === "string" ? parseFloat(score) : Number(score);
+      return num;
+    };
+    const scoreForDb = (score: string | number): string => {
+      if (typeof score === "string" && score.trim() !== "") {
+        const n = parseFloat(score);
+        if (!isNaN(n)) return score.trim();
+      }
+      const n = parseScore(score);
+      return n % 1 === 0 ? `${n}.0` : String(n);
+    };
+
+    // Insert evaluation (scores as strings so Postgres stores decimals, not integers)
     const { data, error } = await supabase
       .from("application_evaluations")
       .insert({
         application_id: body.applicationId,
         reviewer_id: reviewerId,
-        need_score: parseInt(body.needScore),
-        novelty_score: parseInt(body.noveltyScore),
-        feasibility_scalability_score: parseInt(
+        need_score: scoreForDb(body.needScore),
+        novelty_score: scoreForDb(body.noveltyScore),
+        feasibility_scalability_score: scoreForDb(
           body.feasibilityScalabilityScore
         ),
-        market_potential_score: parseInt(body.marketPotentialScore),
-        impact_score: parseInt(body.impactScore),
-        need_comment: body.needComment || null,
-        novelty_comment: body.noveltyComment || null,
+        market_potential_score: scoreForDb(body.marketPotentialScore),
+        impact_score: scoreForDb(body.impactScore),
+        need_comment: body.needComment ?? null,
+        novelty_comment: body.noveltyComment ?? null,
         feasibility_scalability_comment:
-          body.feasibilityScalabilityComment || null,
-        market_potential_comment: body.marketPotentialComment || null,
-        impact_comment: body.impactComment || null,
-        overall_comment: body.overallComment || null,
+          body.feasibilityScalabilityComment ?? null,
+        market_potential_comment: body.marketPotentialComment ?? null,
+        impact_comment: body.impactComment ?? null,
+        overall_comment: body.overallComment ?? null,
       })
       .select()
       .single();
 
     if (error) {
+      console.error("Error creating evaluation:", error);
       if (error.code === "23505") {
-        // Unique constraint violation - evaluation already exists
-        return res.status(409).json({
-          error:
-            "Evaluation already exists for this application. Use PUT to update it.",
-        });
+        return sendError(
+          res,
+          409,
+          "Evaluation already exists for this application. Use PUT to update it."
+        );
       }
-      return res.status(500).json({
-        error: "Failed to create evaluation",
-        details: error.message,
-      });
+      if (error.code === "23503") {
+        const isApplicationFk =
+          error.message?.includes("application_evaluations_application_id_fkey");
+        return sendError(
+          res,
+          400,
+          isApplicationFk
+            ? "Application not found for evaluation"
+            : "Invalid application or reviewer",
+          isApplicationFk
+            ? "Application ID does not exist in the applications table. If applications are stored in new_application, run migration 20240101000013."
+            : "Application or reviewer may not exist"
+        );
+      }
+      if (error.code === "22P02" || error.message?.includes("integer")) {
+        return sendError(
+          res,
+          500,
+          "Failed to create evaluation",
+          "Database schema may not support decimal scores. Run migrations 20240101000012 and 20240101000015 so scores are stored as decimals (values are not rounded to integers)."
+        );
+      }
+      return sendError(
+        res,
+        500,
+        "Failed to create evaluation",
+        error.message,
+        error.code
+      );
     }
 
     return res.status(201).json({
       message: "Evaluation created successfully",
       evaluation: data,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error creating evaluation:", error);
-    return res.status(500).json({
-      error: "Failed to create evaluation",
-      details: error.message,
-    });
+    return sendError(
+      res,
+      500,
+      "Failed to create evaluation",
+      getErrorMessage(error)
+    );
   }
 });
 
@@ -317,12 +401,26 @@ router.put("/:id", async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const body = req.body;
-    const reviewerId = req.headers["x-reviewer-id"] as string;
+    const reviewerIdHeader = req.headers["x-reviewer-id"];
+    const reviewerId =
+      typeof reviewerIdHeader === "string" ? reviewerIdHeader.trim() : null;
 
-    if (!reviewerId) {
-      return res.status(401).json({
-        error: "Reviewer ID is required",
-      });
+    if (
+      !reviewerId ||
+      reviewerId === "undefined" ||
+      reviewerId === "" ||
+      !uuidRegex.test(reviewerId)
+    ) {
+      return sendError(
+        res,
+        401,
+        "Reviewer ID is required",
+        "x-reviewer-id header is missing or invalid"
+      );
+    }
+
+    if (!id || !uuidRegex.test(id)) {
+      return sendError(res, 400, "Invalid evaluation ID", "Evaluation ID must be a valid UUID");
     }
 
     // Check if evaluation exists and belongs to this reviewer
@@ -333,63 +431,91 @@ router.put("/:id", async (req: Request, res: Response) => {
       .eq("reviewer_id", reviewerId)
       .single();
 
-    if (fetchError || !existingEvaluation) {
-      return res.status(404).json({
-        error: "Evaluation not found or you don't have permission to update it",
-      });
-    }
-
-    // Build update object
-    const updateData: any = {};
-
-    if (body.needScore !== undefined) {
-      if (body.needScore < 0 || body.needScore > 10) {
-        return res.status(400).json({
-          error: "needScore must be between 0 and 10",
-        });
+    if (fetchError) {
+      if (fetchError.code === "PGRST116") {
+        return sendError(
+          res,
+          404,
+          "Evaluation not found",
+          "Evaluation not found or you don't have permission to update it"
+        );
       }
-      updateData.need_score = parseInt(body.needScore);
-    }
-
-    if (body.noveltyScore !== undefined) {
-      if (body.noveltyScore < 0 || body.noveltyScore > 10) {
-        return res.status(400).json({
-          error: "noveltyScore must be between 0 and 10",
-        });
-      }
-      updateData.novelty_score = parseInt(body.noveltyScore);
-    }
-
-    if (body.feasibilityScalabilityScore !== undefined) {
-      if (
-        body.feasibilityScalabilityScore < 0 ||
-        body.feasibilityScalabilityScore > 10
-      ) {
-        return res.status(400).json({
-          error: "feasibilityScalabilityScore must be between 0 and 10",
-        });
-      }
-      updateData.feasibility_scalability_score = parseInt(
-        body.feasibilityScalabilityScore
+      return sendError(
+        res,
+        500,
+        "Failed to fetch evaluation",
+        fetchError.message,
+        fetchError.code
       );
     }
 
-    if (body.marketPotentialScore !== undefined) {
-      if (body.marketPotentialScore < 0 || body.marketPotentialScore > 10) {
-        return res.status(400).json({
-          error: "marketPotentialScore must be between 0 and 10",
-        });
-      }
-      updateData.market_potential_score = parseInt(body.marketPotentialScore);
+    if (!existingEvaluation) {
+      return sendError(
+        res,
+        404,
+        "Evaluation not found",
+        "Evaluation not found or you don't have permission to update it"
+      );
     }
 
-    if (body.impactScore !== undefined) {
-      if (body.impactScore < 0 || body.impactScore > 10) {
-        return res.status(400).json({
-          error: "impactScore must be between 0 and 10",
-        });
+    // Parse scores as decimals (no rounding). Use original string when possible so decimals (e.g. 9.44) are never lost.
+    const parseScore = (score: string | number): number => {
+      const num = typeof score === "string" ? parseFloat(score) : Number(score);
+      return num;
+    };
+    const scoreForDb = (score: string | number): string => {
+      if (typeof score === "string" && score.trim() !== "") {
+        const n = parseFloat(score);
+        if (!isNaN(n)) return score.trim();
       }
-      updateData.impact_score = parseInt(body.impactScore);
+      const n = parseScore(score);
+      return n % 1 === 0 ? `${n}.0` : String(n);
+    };
+    const validateScore = (score: string | number, _fieldName: string): number | null => {
+      const numScore = typeof score === "string" ? parseFloat(score) : Number(score);
+      if (isNaN(numScore) || numScore < 0 || numScore > 10) {
+        return null;
+      }
+      const scoreStr = String(score);
+      const decimalParts = scoreStr.split(".");
+      if (decimalParts.length === 2 && decimalParts[1].length > 2) {
+        return null;
+      }
+      return parseScore(score);
+    };
+
+    // Build update object (scores as strings so Postgres stores decimals)
+    const updateData: any = {};
+
+    if (body.needScore !== undefined) {
+      if (validateScore(body.needScore, "needScore") === null) {
+        return sendError(res, 400, "Invalid score", "needScore must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+      }
+      updateData.need_score = scoreForDb(body.needScore);
+    }
+    if (body.noveltyScore !== undefined) {
+      if (validateScore(body.noveltyScore, "noveltyScore") === null) {
+        return sendError(res, 400, "Invalid score", "noveltyScore must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+      }
+      updateData.novelty_score = scoreForDb(body.noveltyScore);
+    }
+    if (body.feasibilityScalabilityScore !== undefined) {
+      if (validateScore(body.feasibilityScalabilityScore, "feasibilityScalabilityScore") === null) {
+        return sendError(res, 400, "Invalid score", "feasibilityScalabilityScore must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+      }
+      updateData.feasibility_scalability_score = scoreForDb(body.feasibilityScalabilityScore);
+    }
+    if (body.marketPotentialScore !== undefined) {
+      if (validateScore(body.marketPotentialScore, "marketPotentialScore") === null) {
+        return sendError(res, 400, "Invalid score", "marketPotentialScore must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+      }
+      updateData.market_potential_score = scoreForDb(body.marketPotentialScore);
+    }
+    if (body.impactScore !== undefined) {
+      if (validateScore(body.impactScore, "impactScore") === null) {
+        return sendError(res, 400, "Invalid score", "impactScore must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+      }
+      updateData.impact_score = scoreForDb(body.impactScore);
     }
 
     if (body.needComment !== undefined)
@@ -415,22 +541,39 @@ router.put("/:id", async (req: Request, res: Response) => {
       .single();
 
     if (error) {
-      return res.status(500).json({
-        error: "Failed to update evaluation",
-        details: error.message,
-      });
+      console.error("Error updating evaluation:", error);
+      if (error.code === "23503") {
+        return sendError(
+          res,
+          400,
+          "Invalid reference",
+          "Related application or reviewer may not exist"
+        );
+      }
+      if (error.code === "22P02" || error.message?.includes("integer")) {
+        return sendError(
+          res,
+          500,
+          "Failed to update evaluation",
+          "Database schema may not support decimal scores. Run migrations 20240101000012 and 20240101000015 so scores are stored as decimals (values are not rounded to integers)."
+        );
+      }
+      return sendError(
+        res,
+        500,
+        "Failed to update evaluation",
+        error.message,
+        error.code
+      );
     }
 
     return res.json({
       message: "Evaluation updated successfully",
       evaluation: data,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error updating evaluation:", error);
-    return res.status(500).json({
-      error: "Failed to update evaluation",
-      details: error.message,
-    });
+    return sendError(res, 500, "Failed to update evaluation", getErrorMessage(error));
   }
 });
 
@@ -455,6 +598,24 @@ router.put(
 
       const { applicationId } = req.params;
       const body = req.body;
+      console.log("[Backend] Received evaluation data:", {
+        applicationId: body?.applicationId ?? applicationId,
+        needScore: body?.needScore,
+        noveltyScore: body?.noveltyScore,
+        feasibilityScalabilityScore: body?.feasibilityScalabilityScore,
+        marketPotentialScore: body?.marketPotentialScore,
+        impactScore: body?.impactScore,
+      });
+
+      // Validate request body
+      if (!body || typeof body !== "object") {
+        return sendError(
+          res,
+          400,
+          "Invalid request body",
+          "Request body must be a JSON object"
+        );
+      }
 
       // Also try to extract from URL if params is empty
       let extractedApplicationId = applicationId;
@@ -469,10 +630,6 @@ router.put(
         }
       }
 
-      // UUID validation regex
-      const uuidRegex =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
       // Use extracted ID if params didn't work
       const finalApplicationId = extractedApplicationId || applicationId;
 
@@ -484,18 +641,12 @@ router.put(
         !uuidRegex.test(finalApplicationId)
       ) {
         console.error("Invalid applicationId:", finalApplicationId);
-        console.error("Raw params.applicationId:", applicationId);
-        console.error("Extracted applicationId:", extractedApplicationId);
-        return res.status(400).json({
-          error: "Invalid application ID",
-          details: "Application ID must be a valid UUID",
-          received: finalApplicationId,
-          debug: {
-            params: req.params,
-            url: req.url,
-            originalUrl: req.originalUrl,
-          },
-        });
+        return sendError(
+          res,
+          400,
+          "Invalid application ID",
+          "Application ID must be a valid UUID"
+        );
       }
 
       // Validate reviewerId from headers
@@ -510,13 +661,12 @@ router.put(
         !uuidRegex.test(reviewerId)
       ) {
         console.error("Invalid reviewer ID:", reviewerIdHeader);
-        console.error("Request headers:", Object.keys(req.headers));
-        console.error("x-reviewer-id value:", reviewerIdHeader);
-        return res.status(401).json({
-          error: "Reviewer ID is required",
-          details: "x-reviewer-id header is missing or invalid",
-          received: reviewerIdHeader,
-        });
+        return sendError(
+          res,
+          401,
+          "Reviewer ID is required",
+          "x-reviewer-id header is missing or invalid"
+        );
       }
 
       console.log(
@@ -536,27 +686,38 @@ router.put(
       ];
 
       for (const field of requiredFields) {
-        if (body[field] === undefined || body[field] === null) {
-          return res.status(400).json({
-            error: `Missing required field: ${field}`,
-          });
+        const val = body[field];
+        if (val === undefined || val === null) {
+          return sendError(res, 400, `Missing required field: ${field}`);
+        }
+        if (String(val).trim() === "") {
+          return sendError(res, 400, `Score cannot be empty: ${field}`);
         }
       }
 
-      // Validate scores
-      const scores = [
-        body.needScore,
-        body.noveltyScore,
-        body.feasibilityScalabilityScore,
-        body.marketPotentialScore,
-        body.impactScore,
-      ];
+      // Validate scores (allow string or number, 0-10 with optional 1 decimal)
+      const scoreKeys = [
+        "needScore",
+        "noveltyScore",
+        "feasibilityScalabilityScore",
+        "marketPotentialScore",
+        "impactScore",
+      ] as const;
 
-      for (const score of scores) {
-        if (score < 0 || score > 10) {
-          return res.status(400).json({
-            error: "All scores must be between 0 and 10",
-          });
+      for (const key of scoreKeys) {
+        const raw = body[key];
+        const num =
+          typeof raw === "string" ? parseFloat(raw) : Number(raw);
+        if (raw === undefined || raw === null || String(raw).trim() === "") {
+          return sendError(res, 400, `Missing required field: ${key}`);
+        }
+        if (isNaN(num) || num < 0 || num > 10) {
+          return sendError(res, 400, "All scores must be between 0 and 10 (inclusive). Values less than 0 or greater than 10 are not allowed.");
+        }
+        const scoreStr = String(raw);
+        const decimalParts = scoreStr.split(".");
+        if (decimalParts.length === 2 && decimalParts[1].length > 2) {
+          return sendError(res, 400, "Scores can have at most 2 decimal places");
         }
       }
 
@@ -571,23 +732,23 @@ router.put(
 
       if (assignmentError) {
         console.error("Error checking reviewer assignment:", assignmentError);
-        console.error("Reviewer ID used in query:", reviewerId);
-        console.error("Application ID used in query:", finalApplicationId);
-        console.error("Error code:", assignmentError.code);
-        console.error("Error details:", assignmentError.details);
-        return res.status(500).json({
-          error: "Failed to verify reviewer assignment",
-          details: assignmentError.message,
-          code: assignmentError.code,
-        });
+        return sendError(
+          res,
+          500,
+          "Failed to verify reviewer assignment",
+          assignmentError.message,
+          assignmentError.code
+        );
       }
 
       if (!assignment) {
         console.log("Reviewer not assigned to application");
-        return res.status(403).json({
-          error: "You are not assigned to review this application",
-          details: `Reviewer ${reviewerId} is not assigned to application ${finalApplicationId}`,
-        });
+        return sendError(
+          res,
+          403,
+          "You are not assigned to review this application",
+          "Reviewer is not assigned to this application"
+        );
       }
 
       console.log("Reviewer assignment verified:", assignment.id);
@@ -603,22 +764,37 @@ router.put(
 
       if (existingError && existingError.code !== "PGRST116") {
         console.error("Error checking existing evaluation:", existingError);
-        return res.status(500).json({
-          error: "Failed to check existing evaluation",
-          details: existingError.message,
-        });
+        return sendError(
+          res,
+          500,
+          "Failed to check existing evaluation",
+          existingError.message,
+          existingError.code
+        );
       }
 
-      const evaluationData = {
+      // Parse scores as decimals (no rounding). Use original string when possible so decimals (e.g. 9.44) are never lost.
+      const parseScore = (score: string | number): number => {
+        const num = typeof score === "string" ? parseFloat(score) : Number(score);
+        return num;
+      };
+      const scoreForDb = (score: string | number): string => {
+        if (typeof score === "string" && score.trim() !== "") {
+          const n = parseFloat(score);
+          if (!isNaN(n)) return score.trim();
+        }
+        const n = parseScore(score);
+        return n % 1 === 0 ? `${n}.0` : String(n);
+      };
+
+      const buildEvaluationData = () => ({
         application_id: finalApplicationId,
         reviewer_id: reviewerId,
-        need_score: parseInt(body.needScore),
-        novelty_score: parseInt(body.noveltyScore),
-        feasibility_scalability_score: parseInt(
-          body.feasibilityScalabilityScore
-        ),
-        market_potential_score: parseInt(body.marketPotentialScore),
-        impact_score: parseInt(body.impactScore),
+        need_score: scoreForDb(body.needScore),
+        novelty_score: scoreForDb(body.noveltyScore),
+        feasibility_scalability_score: scoreForDb(body.feasibilityScalabilityScore),
+        market_potential_score: scoreForDb(body.marketPotentialScore),
+        impact_score: scoreForDb(body.impactScore),
         need_comment: body.needComment || null,
         novelty_comment: body.noveltyComment || null,
         feasibility_scalability_comment:
@@ -626,44 +802,73 @@ router.put(
         market_potential_comment: body.marketPotentialComment || null,
         impact_comment: body.impactComment || null,
         overall_comment: body.overallComment || null,
+      });
+
+      const evaluationData = buildEvaluationData();
+      let data: { id?: string; [key: string]: unknown } | null = null;
+      let error: { message: string; code?: string; details?: unknown } | null =
+        null;
+
+      const runUpsert = async (payload: ReturnType<typeof buildEvaluationData>) => {
+        if (existing) {
+          return supabase
+            .from("application_evaluations")
+            .update(payload)
+            .eq("id", existing.id)
+            .select()
+            .single();
+        }
+        return supabase
+          .from("application_evaluations")
+          .insert(payload)
+          .select()
+          .single();
       };
 
-      let data, error;
-
-      if (existing) {
-        // Update existing
-        console.log("Updating existing evaluation:", existing.id);
-        const result = await supabase
-          .from("application_evaluations")
-          .update(evaluationData)
-          .eq("id", existing.id)
-          .select()
-          .single();
-        data = result.data;
-        error = result.error;
-      } else {
-        // Insert new
-        console.log("Creating new evaluation");
-        const result = await supabase
-          .from("application_evaluations")
-          .insert(evaluationData)
-          .select()
-          .single();
-        data = result.data;
-        error = result.error;
-      }
+      const result = await runUpsert(evaluationData);
+      data = result.data;
+      error = result.error;
 
       if (error) {
         console.error("Error saving evaluation:", error);
-        console.error("Error code:", error.code);
-        console.error("Error details:", error.details);
-        return res.status(500).json({
-          error: existing
-            ? "Failed to update evaluation"
-            : "Failed to create evaluation",
-          details: error.message,
-          code: error.code,
-        });
+        const operation = existing ? "update" : "create";
+        if (error.code === "23505") {
+          return sendError(
+            res,
+            409,
+            "Evaluation conflict",
+            "Evaluation already exists for this application"
+          );
+        }
+        if (error.code === "23503") {
+          const isApplicationFk =
+            error.message?.includes("application_evaluations_application_id_fkey");
+          return sendError(
+            res,
+            400,
+            isApplicationFk
+              ? "Application not found for evaluation"
+              : "Invalid reference",
+            isApplicationFk
+              ? "Application ID does not exist in the applications table. If applications are stored in new_application, run migration 20240101000013."
+              : "Application or reviewer may not exist"
+          );
+        }
+        if (error.code === "22P02" || error.message?.includes("integer")) {
+          return sendError(
+            res,
+            500,
+            `Failed to ${operation} evaluation`,
+            "Database schema may not support decimal scores. Run migrations 20240101000012 and 20240101000015 so scores are stored as decimals (values are not rounded to integers)."
+          );
+        }
+        return sendError(
+          res,
+          500,
+          existing ? "Failed to update evaluation" : "Failed to create evaluation",
+          error.message,
+          error.code
+        );
       }
 
       console.log("Evaluation saved successfully:", data?.id);
@@ -673,15 +878,15 @@ router.put(
           : "Evaluation created successfully",
         evaluation: data,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("=== Error in PUT /application/:applicationId ===");
       console.error("Error:", error);
-      console.error("Error message:", error.message);
-      console.error("Error stack:", error.stack);
-      return res.status(500).json({
-        error: "Failed to save evaluation",
-        details: error.message || "An unexpected error occurred",
-      });
+      return sendError(
+        res,
+        500,
+        "Failed to save evaluation",
+        getErrorMessage(error)
+      );
     }
   }
 );
