@@ -303,12 +303,12 @@ router.get("/", async (req: Request, res: Response) => {
 ========================= */
 router.put("/change-password", async (req: Request, res: Response) => {
   try {
-    const { userId, currentPassword, newPassword } = req.body;
+    const { userId, email, oldPassword, newPassword } = req.body;
 
     // Validate required fields
-    if (!userId || !newPassword) {
+    if (!userId || !email || !oldPassword || !newPassword) {
       return res.status(400).json({
-        error: "Missing required fields: userId and newPassword are required",
+        error: "Missing required fields: userId, email, oldPassword, and newPassword are required",
       });
     }
 
@@ -316,6 +316,26 @@ router.put("/change-password", async (req: Request, res: Response) => {
     if (newPassword.length < 8) {
       return res.status(400).json({
         error: "Password must be at least 8 characters long",
+      });
+    }
+
+    // Verify old password by attempting to sign in
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+      email,
+      password: oldPassword,
+    });
+
+    if (signInError || !signInData.user) {
+      console.error("Old password verification failed:", signInError);
+      return res.status(401).json({
+        error: "Current password is incorrect",
+      });
+    }
+
+    // Verify the authenticated user matches the userId
+    if (signInData.user.id !== userId) {
+      return res.status(403).json({
+        error: "Unauthorized to change this password",
       });
     }
 
