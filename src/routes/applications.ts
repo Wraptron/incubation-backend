@@ -144,7 +144,6 @@ router.post("/", async (req: Request, res: Response) => {
         your_name: body.yourName,
         is_iitm: body.isIITM,
         roll_number: body.rollNumber,
-        roll_number_other: body.rollNumberOther || null,
         college_name: body.collegeName || null,
         current_occupation: body.currentOccupation || null,
         phone_number: body.phoneNumber,
