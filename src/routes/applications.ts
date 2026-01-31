@@ -46,7 +46,7 @@ export async function expirePendingReviewerInvites(): Promise<{
     })
     .eq("invite_status", "pending")
     .lt("invited_at", cutoffIso)
-    .select("id");
+    .select("id, application_id, reviewer_id");
 
   if (updateError) {
     console.error("expirePendingReviewerInvites update error:", updateError);
@@ -56,6 +56,37 @@ export async function expirePendingReviewerInvites(): Promise<{
   const count = updated?.length ?? 0;
   if (count > 0) {
     console.log(`[cron] Auto-rejected ${count} pending reviewer invite(s) (older than ${REVIEWER_INVITE_EXPIRE_DAYS} days).`);
+    // Notify managers for each auto-rejected invite
+    for (const row of updated ?? []) {
+      const { application_id, reviewer_id } = row as { application_id: string; reviewer_id: string };
+      if (!application_id || !reviewer_id) continue;
+      const { data: app } = await supabase
+        .from("new_application")
+        .select("team_name")
+        .eq("id", application_id)
+        .single();
+      const { data: reviewer } = await supabase
+        .from("user_profiles")
+        .select("full_name")
+        .eq("id", reviewer_id)
+        .single();
+      const { data: managers } = await supabase
+        .from("user_profiles")
+        .select("email_address")
+        .eq("role", "manager")
+        .not("email_address", "is", null);
+      const emails = (managers ?? []).map((m) => m.email_address).filter(Boolean) as string[];
+      if (emails.length) {
+        await sendManagerReviewerResponseEmail(
+          emails,
+          reviewer?.full_name ?? "Reviewer",
+          app?.team_name ?? "Startup",
+          application_id,
+          false,
+          true
+        );
+      }
+    }
   }
   return { updated: count };
 }
@@ -130,6 +161,91 @@ async function sendReviewerInviteEmail(
     return { success: true };
   } catch (error: any) {
     console.error("❌ Error sending reviewer invite email:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/** Send email to managers when a reviewer accepts/rejects or invite is auto-rejected */
+async function sendManagerReviewerResponseEmail(
+  managerEmails: string[],
+  reviewerName: string,
+  startupName: string,
+  applicationId: string,
+  accepted: boolean,
+  autoRejected?: boolean
+): Promise<{ success: boolean; error?: string }> {
+  if (!managerEmails.length) return { success: true };
+  try {
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD;
+    if (!gmailUser || !gmailPass) {
+      console.warn(
+        "GMAIL_USER or GMAIL_APP_PASSWORD not set – manager notification email skipped."
+      );
+      return { success: false, error: "Email not configured" };
+    }
+
+    const appUrl = process.env.APP_URL || "http://localhost:3000";
+    const applicationLink = `${appUrl}/dashboard/applications/${applicationId}`;
+
+    let subject: string;
+    let message: string;
+    if (autoRejected) {
+      subject = `Reviewer invite auto-expired: ${reviewerName} – ${startupName}`;
+      message = `The evaluation request for <strong>${reviewerName}</strong> for the startup <strong>${startupName}</strong> was automatically rejected after ${REVIEWER_INVITE_EXPIRE_DAYS} days (no response). Please assign a new reviewer if needed.`;
+    } else {
+      subject = accepted
+        ? `Reviewer accepted: ${reviewerName} – ${startupName}`
+        : `Reviewer declined: ${reviewerName} – ${startupName}`;
+      message = accepted
+        ? `The reviewer <strong>${reviewerName}</strong> has <strong>accepted</strong> the evaluation request for the startup <strong>${startupName}</strong>.`
+        : `The reviewer <strong>${reviewerName}</strong> has <strong>declined</strong> the evaluation request for the startup <strong>${startupName}</strong>. Please assign another reviewer if needed.`;
+    }
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: gmailUser, pass: gmailPass },
+    });
+
+    const emailHTML = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
+          .content { padding: 20px; background-color: #fff; }
+          .button { display: inline-block; padding: 10px 20px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>Evaluation Request Update – Nirmaan Pre-Incubation</h2>
+          </div>
+          <div class="content">
+            <p>${message}</p>
+            <p><a href="${applicationLink}" class="button">View application</a></p>
+            <p>Thanks,<br>Team Nirmaan</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const toList = managerEmails.filter(Boolean).join(", ");
+    await transporter.sendMail({
+      from: `"Nirmaan Pre-Incubation" <${gmailUser}>`,
+      to: toList,
+      subject,
+      html: emailHTML,
+      text: message.replace(/<[^>]*>/g, "") + `\nView application: ${applicationLink}`,
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    console.error("❌ Error sending manager reviewer-response email:", error);
     return { success: false, error: error.message };
   }
 }
@@ -472,6 +588,113 @@ router.post("/:id/invite-reviewer", async (req: Request, res: Response) => {
     console.error("POST invite-reviewer error:", error);
     return res.status(500).json({
       error: "Failed to invite reviewer",
+      details: error?.message || String(error),
+    });
+  }
+});
+
+/* =========================
+   POST /api/applications/:id/reviewer-respond
+   Reviewer accepts or rejects the assignment. Sends manager notification email.
+========================= */
+router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
+  try {
+    const { id: applicationId } = req.params;
+    const accept = req.body.accept === true;
+
+    if (!applicationId || !uuidRegex.test(applicationId)) {
+      return res.status(400).json({ error: "Invalid application ID" });
+    }
+
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+    if (!token) {
+      return res.status(401).json({
+        error: "Authorization required (Bearer token)",
+      });
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser(token);
+    if (userError || !user) {
+      return res.status(401).json({
+        error: "Invalid or expired token",
+      });
+    }
+
+    const reviewerId = user.id;
+
+    const { error: updateError } = await supabase
+      .from("application_reviewers")
+      .update({
+        invite_status: accept ? "accepted" : "rejected",
+        responded_at: new Date().toISOString(),
+      })
+      .eq("application_id", applicationId)
+      .eq("reviewer_id", reviewerId);
+
+    if (updateError) {
+      return res.status(500).json({
+        error: "Failed to update response",
+        details: updateError.message,
+      });
+    }
+
+    if (accept) {
+      const { data: acceptedRows } = await supabase
+        .from("application_reviewers")
+        .select("id")
+        .eq("application_id", applicationId)
+        .eq("invite_status", "accepted");
+
+      if (acceptedRows && acceptedRows.length >= 2) {
+        await supabase
+          .from("new_application")
+          .update({ status: "under_review" })
+          .eq("id", applicationId);
+      }
+    }
+
+    // Notify managers
+    const { data: application } = await supabase
+      .from("new_application")
+      .select("team_name")
+      .eq("id", applicationId)
+      .single();
+    const { data: reviewer } = await supabase
+      .from("user_profiles")
+      .select("full_name")
+      .eq("id", reviewerId)
+      .single();
+    const { data: managers } = await supabase
+      .from("user_profiles")
+      .select("email_address")
+      .eq("role", "manager")
+      .not("email_address", "is", null);
+    const managerEmails = (managers ?? []).map((m) => m.email_address).filter(Boolean) as string[];
+    if (managerEmails.length) {
+      await sendManagerReviewerResponseEmail(
+        managerEmails,
+        reviewer?.full_name ?? "Reviewer",
+        application?.team_name ?? "Startup",
+        applicationId,
+        accept,
+        false
+      );
+    }
+
+    return res.status(200).json({
+      message: accept
+        ? "You have accepted the assignment"
+        : "You have declined the assignment",
+      accepted: accept,
+    });
+  } catch (error: any) {
+    console.error("POST reviewer-respond error:", error);
+    return res.status(500).json({
+      error: "Failed to update response",
       details: error?.message || String(error),
     });
   }
