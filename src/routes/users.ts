@@ -53,7 +53,7 @@ async function sendWelcomeEmail(
       Email: ${email}
       Password: ${password}
       
-      Login URL: ${process.env.APP_URL || "http://localhost:3000"}/login
+      Login URL: ${process.env.APP_URL || "https://traktor.sieiitm.org"}/login
       =====================================
     `);
 
@@ -96,7 +96,7 @@ async function sendWelcomeEmail(
             <p>Please click the button below to manage your account:</p>
             
             <p style="text-align: center;">
-              <a href="${process.env.APP_URL || "http://localhost:3000"}/login" class="button">Login to Your Account</a>
+              <a href="${process.env.APP_URL || "https://traktor.sieiitm.org"}/login" class="button">Login to Your Account</a>
             </p>
             
             <div class="credentials">
@@ -127,7 +127,7 @@ Dear ${fullName},
 
 You have been onboarded as a user on the platform for Nirmaan Pre-Incubation Program!
 
-Please visit ${process.env.APP_URL || "http://localhost:3000"}/login to manage your account.
+Please visit ${process.env.APP_URL || "https://traktor.sieiitm.org"}/login to manage your account.
 
 Your email ID is your login ID and your default password is ${password}.
 

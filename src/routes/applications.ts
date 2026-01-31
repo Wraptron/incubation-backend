@@ -107,7 +107,7 @@ async function sendReviewerInviteEmail(
       return { success: false, error: "Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD)" };
     }
 
-    const appUrl = process.env.APP_URL || "http://localhost:3000";
+    const appUrl = process.env.APP_URL || "https://traktor.sieiitm.org";
     const loginLink = `${appUrl}/login`;
 
     const transporter = nodemailer.createTransport({
@@ -185,7 +185,7 @@ async function sendManagerReviewerResponseEmail(
       return { success: false, error: "Email not configured" };
     }
 
-    const appUrl = process.env.APP_URL || "http://localhost:3000";
+    const appUrl = process.env.APP_URL || "https://traktor.sieiitm.org";
     const applicationLink = `${appUrl}/dashboard/applications/${applicationId}`;
 
     let subject: string;
