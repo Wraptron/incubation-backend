@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
-import applicationsRouter from "./routes/applications";
+import applicationsRouter, { expirePendingReviewerInvites } from "./routes/applications";
 import evaluationsRouter from "./routes/evaluations";
 import usersRouter from "./routes/users";
 
@@ -59,6 +59,17 @@ const baseUrl =
     : env === "staging"
     ? process.env.BACKEND_URL || `http://your-staging-backend-url:${PORT}`
     : `http://localhost:${PORT}`;
+
+// Run reviewer invite expiry on startup and every hour (pending invites older than 2 days → auto-rejected)
+const REVIEWER_INVITE_EXPIRE_INTERVAL_MS = 60 * 60 * 1000;
+expirePendingReviewerInvites().catch((err) =>
+  console.warn("Startup reviewer invite expiry check failed:", err)
+);
+setInterval(() => {
+  expirePendingReviewerInvites().catch((err) =>
+    console.warn("Scheduled reviewer invite expiry failed:", err)
+  );
+}, REVIEWER_INVITE_EXPIRE_INTERVAL_MS);
 
 app.listen(PORT, host, () => {
   console.log(`🚀 Server is running on http://${host}:${PORT}`);
