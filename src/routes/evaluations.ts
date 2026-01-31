@@ -276,10 +276,10 @@ router.post("/", async (req: Request, res: Response) => {
       }
     }
 
-    // Check if reviewer is assigned to this application
+    // Check if reviewer is assigned to this application and has accepted
     const { data: assignment, error: assignmentError } = await supabase
       .from("application_reviewers")
-      .select("id")
+      .select("id, invite_status")
       .eq("application_id", body.applicationId)
       .eq("reviewer_id", reviewerId)
       .maybeSingle();
@@ -300,6 +300,17 @@ router.post("/", async (req: Request, res: Response) => {
         res,
         403,
         "You are not assigned to review this application"
+      );
+    }
+
+    const inviteStatus = assignment.invite_status ?? "pending";
+    if (inviteStatus !== "accepted") {
+      return sendError(
+        res,
+        403,
+        inviteStatus === "rejected"
+          ? "You have declined this assignment"
+          : "Please accept the reviewer assignment before submitting an evaluation"
       );
     }
 
@@ -721,11 +732,11 @@ router.put(
         }
       }
 
-      // Check if reviewer is assigned (reviewerId already validated above with UUID regex)
+      // Check if reviewer is assigned and has accepted (reviewerId already validated above with UUID regex)
       console.log("Checking reviewer assignment...");
       const { data: assignment, error: assignmentError } = await supabase
         .from("application_reviewers")
-        .select("id")
+        .select("id, invite_status")
         .eq("application_id", finalApplicationId)
         .eq("reviewer_id", reviewerId)
         .maybeSingle();
@@ -748,6 +759,17 @@ router.put(
           403,
           "You are not assigned to review this application",
           "Reviewer is not assigned to this application"
+        );
+      }
+
+      const inviteStatus = assignment.invite_status ?? "pending";
+      if (inviteStatus !== "accepted") {
+        return sendError(
+          res,
+          403,
+          inviteStatus === "rejected"
+            ? "You have declined this assignment"
+            : "Please accept the reviewer assignment before submitting an evaluation"
         );
       }
 

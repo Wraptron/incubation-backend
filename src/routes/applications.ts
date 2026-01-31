@@ -1,131 +1,84 @@
 import { Router, Request, Response } from "express";
-import crypto from "crypto";
+import nodemailer from "nodemailer";
 import { supabase } from "../lib/supabase";
 
 const router = Router();
 
-router.use((req, _res, next) => {
-  console.log("[Backend] Applications request:", req.method, req.path || req.url);
-  next();
-});
+const uuidRegex =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const RESUME_TOKEN_BYTES = 32;
-const RESUME_TOKEN_EXPIRY_DAYS = 30;
-
-function hashToken(token: string): string {
-  return crypto.createHash("sha256").update(token, "utf8").digest("hex");
-}
-
-function buildDraftPayload(body: Record<string, unknown>) {
-  let facultyInvolved = body.facultyInvolved;
-  if (typeof facultyInvolved === "string") {
-    try {
-      facultyInvolved = JSON.parse(facultyInvolved);
-    } catch {
-      facultyInvolved = "NA";
+async function sendReviewerInviteEmail(
+  toEmail: string,
+  reviewerName: string,
+  startupName: string,
+  applicationId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD;
+    if (!gmailUser || !gmailPass) {
+      console.warn(
+        "GMAIL_USER or GMAIL_APP_PASSWORD not set – reviewer invite email skipped. Set both in .env to send emails."
+      );
+      return { success: false, error: "Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD)" };
     }
+
+    const appUrl = process.env.APP_URL || "http://localhost:3000";
+    const loginLink = `${appUrl}/login`;
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailPass,
+      },
+    });
+
+    const emailHTML = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
+          .content { padding: 20px; background-color: #fff; }
+          .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 10px 5px 10px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>Reviewer Assignment – Nirmaan Pre-Incubation</h2>
+          </div>
+          <div class="content">
+            <p>Dear ${reviewerName},</p>
+            <p>You have been assigned to review the following startup application:</p>
+            <p><strong>Startup: ${startupName}</strong></p>
+            <p>Please log in to accept or decline this assignment and submit your evaluation.</p>
+            <p>
+              <a href="${loginLink}" class="button">Login</a>
+            </p>
+            <p>Thanks,<br>Team Nirmaan</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: `"Nirmaan Pre-Incubation" <${gmailUser}>`,
+      to: toEmail,
+      subject: `You have been assigned to review: ${startupName}`,
+      html: emailHTML,
+      text: `Dear ${reviewerName},\n\nYou have been assigned to review the startup: ${startupName}.\n\nLog in here: ${loginLink}\n\nThanks,\nTeam Nirmaan`,
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    console.error("❌ Error sending reviewer invite email:", error);
+    return { success: false, error: error.message };
   }
-  if (Array.isArray(facultyInvolved) && facultyInvolved.length === 0) facultyInvolved = "NA";
-  if (!facultyInvolved) facultyInvolved = "NA";
-
-  let teamMembers = body.teamMembers;
-  if (typeof teamMembers === "string") {
-    try {
-      teamMembers = JSON.parse(teamMembers);
-    } catch {
-      teamMembers = [];
-    }
-  }
-  if (!Array.isArray(teamMembers)) teamMembers = [];
-
-  let otherIndustries = body.otherIndustries ?? [];
-  if (typeof otherIndustries === "string") {
-    try {
-      otherIndustries = JSON.parse(otherIndustries);
-    } catch {
-      otherIndustries = [];
-    }
-  }
-  if (!Array.isArray(otherIndustries)) otherIndustries = [];
-
-  let technologiesUtilized = body.technologiesUtilized ?? [];
-  if (typeof technologiesUtilized === "string") {
-    try {
-      technologiesUtilized = JSON.parse(technologiesUtilized);
-    } catch {
-      technologiesUtilized = [];
-    }
-  }
-  if (!Array.isArray(technologiesUtilized)) technologiesUtilized = [];
-
-  let externalFundingRaw = body.externalFunding ?? [];
-  if (typeof externalFundingRaw === "string") {
-    try {
-      const parsed = JSON.parse(externalFundingRaw);
-      externalFundingRaw = Array.isArray(parsed) ? parsed : [];
-    } catch {
-      externalFundingRaw = [];
-    }
-  }
-  const externalFunding: unknown[] | null = Array.isArray(externalFundingRaw) && externalFundingRaw.length === 0
-    ? null
-    : Array.isArray(externalFundingRaw)
-      ? externalFundingRaw
-      : [];
-
-  // Normalize Yes/No fields for check constraints (valid_has_*, valid_*, etc.)
-  const yesNo = (v: unknown) => (v === "Yes" ? "Yes" : "No");
-
-  return {
-    email: body.email ?? "",
-    team_name: body.teamName ?? "",
-    your_name: body.yourName ?? "",
-    is_iitm: yesNo(body.isIITM),
-    roll_number: body.rollNumber ?? "",
-    college_name: body.collegeName ?? null,
-    current_occupation: body.currentOccupation ?? null,
-    phone_number: body.phoneNumber ?? "",
-    channel: body.channel ?? "",
-    channel_other: body.channelOther ?? null,
-    co_founders_count: Math.max(0, parseInt(String(body.coFoundersCount ?? "0"), 10) || 0),
-    faculty_involved: facultyInvolved,
-    prior_entrepreneurship_experience: yesNo(body.priorEntrepreneurshipExperience),
-    team_prior_entrepreneurship_experience: yesNo(body.teamPriorEntrepreneurshipExperience),
-    prior_experience_details: body.priorExperienceDetails ?? null,
-    mca_registered: yesNo(body.mcaRegistered),
-    external_funding: externalFunding,
-    currently_incubated: body.currentlyIncubated ?? null,
-    team_members: teamMembers,
-    nirmaan_can_help: body.nirmaanCanHelp ?? "",
-    pre_incubation_reason: body.preIncubationReason ?? "",
-    heard_about_startups: body.heardAboutStartups ?? "",
-    heard_about_nirmaan: body.heardAboutNirmaan ?? "",
-    problem_solving: body.problemSolving ?? "",
-    your_solution: body.yourSolution ?? "",
-    solution_type: body.solutionType ?? "",
-    solution_type_other: body.solutionTypeOther ?? null,
-    target_industry: body.targetIndustry ?? "",
-    other_industries: otherIndustries,
-    industry_other: body.industryOther ?? null,
-    other_industries_other: body.otherIndustriesOther ?? null,
-    technologies_utilized: technologiesUtilized,
-    other_technology_details: body.otherTechnologyDetails ?? null,
-    startup_stage: body.startupStage ?? "",
-    has_intellectual_property: yesNo(body.hasIntellectualProperty),
-    has_potential_intellectual_property: yesNo(body.hasPotentialIntellectualProperty),
-    ip_file_link: body.ipFileLink ?? null,
-    potential_ip_file_link: body.potentialIpFileLink ?? null,
-    nirmaan_presentation_link: body.nirmaanPresentationLink ?? "",
-    has_proof_of_concept: yesNo(body.hasProofOfConcept),
-    proof_of_concept_details: body.proofOfConceptDetails ?? null,
-    has_patents_or_papers: yesNo(body.hasPatentsOrPapers),
-    patents_or_papers_details: body.patentsOrPapersDetails ?? null,
-    seed_fund_utilization_plan: body.seedFundUtilizationPlan ?? "",
-    pitch_video_link: body.pitchVideoLink ?? "",
-    document1_link: body.document1Link ?? null,
-    document2_link: body.document2Link ?? null,
-    status: "draft",
-  };
 }
 
 /* =========================
@@ -284,6 +237,7 @@ router.post("/", async (req: Request, res: Response) => {
 
         // Startup Registration & Funding
         mca_registered: body.mcaRegistered,
+        dpiit_registered: body.dpiitRegistered || null,
         dpiit_details: body.dpiitDetails || null,
         external_funding: externalFunding || null,
         currently_incubated: body.currentlyIncubated || null,
@@ -311,10 +265,10 @@ router.post("/", async (req: Request, res: Response) => {
         technologies_utilized: technologiesUtilized,
         other_technology_details: body.otherTechnologyDetails || null,
 
-        // Startup Stage & IP (valid_has_ip constraint requires Yes/No)
+        // Startup Stage & IP
         startup_stage: body.startupStage,
-        has_intellectual_property: body.hasIntellectualProperty === "Yes" ? "Yes" : "No",
-        has_potential_intellectual_property: body.hasPotentialIntellectualProperty === "Yes" ? "Yes" : "No",
+        has_intellectual_property: body.hasIntellectualProperty,
+        has_potential_intellectual_property: body.hasPotentialIntellectualProperty,
         ip_file_link: body.ipFileLink || null,
         potential_ip_file_link: body.potentialIpFileLink || null,
 
@@ -322,7 +276,7 @@ router.post("/", async (req: Request, res: Response) => {
         nirmaan_presentation_link: body.nirmaanPresentationLink,
         has_proof_of_concept: body.hasProofOfConcept,
         proof_of_concept_details: body.proofOfConceptDetails || null,
-        has_patents_or_papers: body.hasPatentsOrPapers === "Yes" ? "Yes" : "No",
+        has_patents_or_papers: body.hasPatentsOrPapers,
         patents_or_papers_details: body.patentsOrPapersDetails || null,
 
         // Seed Fund & Pitch
@@ -361,111 +315,112 @@ router.post("/", async (req: Request, res: Response) => {
 });
 
 /* =========================
-   GET /api/applications/resume?token=xxx
-   Resume draft by secure token (no auth required).
+   POST /api/applications/:id/invite-reviewer
+   Manager invites one reviewer; sends email and creates assignment (pending).
 ========================= */
-router.get("/resume", async (req: Request, res: Response) => {
+router.post("/:id/invite-reviewer", async (req: Request, res: Response) => {
   try {
-    console.log("[Backend] Draft resume GET received");
-    const token = (req.query.token as string)?.trim();
-    if (!token) {
-      console.log("[Backend] Draft resume: missing token");
-      return res.status(400).json({ error: "Missing token", details: "Resume link token is required." });
+    const { id: applicationId } = req.params;
+    const { reviewerId } = req.body;
+
+    if (
+      !applicationId ||
+      !uuidRegex.test(applicationId) ||
+      !reviewerId ||
+      !uuidRegex.test(reviewerId)
+    ) {
+      return res.status(400).json({
+        error: "Valid application ID and reviewer ID are required",
+      });
     }
-    const tokenHash = hashToken(token);
-    const { data: draft, error } = await supabase
+
+    const { data: application, error: appError } = await supabase
       .from("new_application")
-      .select("*")
-      .eq("resume_token_hash", tokenHash)
-      .eq("status", "draft")
+      .select("id, status, team_name")
+      .eq("id", applicationId)
       .single();
 
-    if (error || !draft) {
-      console.log("[Backend] Draft resume: not found or error", error?.message ?? "no draft");
-      return res.status(404).json({ error: "Draft not found", details: "Invalid or expired resume link." });
-    }
-    if (draft.resume_token_expiry && new Date(draft.resume_token_expiry) < new Date()) {
-      console.log("[Backend] Draft resume: link expired");
-      return res.status(410).json({ error: "Link expired", details: "This resume link has expired." });
-    }
-    console.log("[Backend] Draft resume: success, draft id", draft.id);
-    const { resume_token_hash, resume_token_expiry, ...safe } = draft;
-    return res.json({ draft: safe });
-  } catch (err) {
-    console.error("[Backend] Draft resume error:", err);
-    return res.status(500).json({ error: "Failed to load draft" });
-  }
-});
-
-/* =========================
-   POST /api/applications/draft
-   Save draft (create or update). On first create: generate resume token, store hash+expiry, return token for email.
-========================= */
-router.post("/draft", async (req: Request, res: Response) => {
-  try {
-    const body = req.body || {};
-    const applicationId = body.applicationId as string | undefined;
-    const applicantId = (body.applicantId as string)?.trim() || null;
-    const email = (body.email as string)?.trim() || "";
-    console.log("[Backend] Draft POST received", {
-      applicationId: applicationId ?? "(new)",
-      applicantId: applicantId ?? "(none)",
-      email: email ? `${email.slice(0, 3)}***` : "(empty)",
-    });
-
-    const payload = buildDraftPayload(body);
-
-    if (applicationId) {
-      console.log("[Backend] Draft POST: updating existing draft", applicationId);
-      const { data, error } = await supabase
-        .from("new_application")
-        .update({
-          ...payload,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", applicationId)
-        .eq("status", "draft")
-        .select()
-        .single();
-
-      if (error) {
-        console.error("[Backend] Draft update error:", error);
-        return res.status(500).json({ error: "Failed to save draft", details: error.message });
-      }
-      console.log("[Backend] Draft POST: update success", data.id);
-      return res.json({ id: data.id, resumeToken: null, isNew: false });
+    if (appError || !application) {
+      return res.status(404).json({ error: "Application not found" });
     }
 
-    console.log("[Backend] Draft POST: creating new draft");
-    const resumeToken = crypto.randomBytes(RESUME_TOKEN_BYTES).toString("hex");
-    const resumeTokenHash = hashToken(resumeToken);
-    const expiry = new Date();
-    expiry.setDate(expiry.getDate() + RESUME_TOKEN_EXPIRY_DAYS);
+    if (application.status !== "pending") {
+      return res.status(400).json({
+        error: "Reviewer can only be invited for applications in pending status",
+      });
+    }
 
-    const { data, error } = await supabase
-      .from("new_application")
+    const { data: reviewer, error: reviewerError } = await supabase
+      .from("user_profiles")
+      .select("id, full_name, email_address")
+      .eq("id", reviewerId)
+      .eq("role", "reviewer")
+      .single();
+
+    if (reviewerError || !reviewer) {
+      return res.status(400).json({
+        error: "Reviewer not found or not a reviewer",
+      });
+    }
+
+    const { data: existing } = await supabase
+      .from("application_reviewers")
+      .select("id")
+      .eq("application_id", applicationId)
+      .eq("reviewer_id", reviewerId)
+      .maybeSingle();
+
+    if (existing) {
+      return res.status(409).json({
+        error: "This reviewer is already assigned to this application",
+      });
+    }
+
+    const invitedAt = new Date().toISOString();
+    const { error: insertError } = await supabase
+      .from("application_reviewers")
       .insert({
-        ...payload,
-        resume_token_hash: resumeTokenHash,
-        resume_token_expiry: expiry.toISOString(),
-      })
-      .select()
-      .single();
+        application_id: applicationId,
+        reviewer_id: reviewerId,
+        invite_status: "pending",
+        invited_at: invitedAt,
+      });
 
-    if (error) {
-      console.error("[Backend] Draft create error:", error);
-      return res.status(500).json({ error: "Failed to save draft", details: error.message });
+    if (insertError) {
+      console.error("Insert application_reviewers error:", insertError);
+      const hint = insertError.message?.includes("invite_status") ||
+        insertError.message?.includes("invited_at")
+        ? " Run the migration: supabase_application_reviewers_invite.sql (add invite_status, invited_at, responded_at to application_reviewers)."
+        : "";
+      return res.status(500).json({
+        error: "Failed to assign reviewer",
+        details: (insertError.message || String(insertError)) + hint,
+      });
     }
-    console.log("[Backend] Draft POST: create success", data.id, "resumeToken length", resumeToken.length);
-    return res.json({
-      id: data.id,
-      resumeToken,
-      resumeTokenExpiry: expiry.toISOString(),
-      isNew: true,
+
+    const emailResult = await sendReviewerInviteEmail(
+      reviewer.email_address || "",
+      reviewer.full_name || "Reviewer",
+      application.team_name || "Startup",
+      applicationId
+    );
+
+    if (!emailResult.success) {
+      console.warn("Invite email failed but assignment created:", emailResult.error);
+    }
+
+    // Keep status as pending until at least 2 reviewers have accepted (handled in reviewer-respond)
+
+    return res.status(201).json({
+      message: "Reviewer invited successfully",
+      emailSent: emailResult.success,
     });
-  } catch (err) {
-    console.error("[Backend] Draft save error:", err);
-    return res.status(500).json({ error: "Failed to save draft" });
+  } catch (error: any) {
+    console.error("POST invite-reviewer error:", error);
+    return res.status(500).json({
+      error: "Failed to invite reviewer",
+      details: error?.message || String(error),
+    });
   }
 });
 
