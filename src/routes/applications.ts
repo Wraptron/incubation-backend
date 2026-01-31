@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { supabase } from "../lib/supabase";
 
@@ -6,6 +7,125 @@ const router = Router();
 
 const uuidRegex =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const RESUME_TOKEN_BYTES = 32;
+const RESUME_TOKEN_EXPIRY_DAYS = 30;
+
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+function buildDraftPayload(body: Record<string, unknown>) {
+  const yesNo = (v: unknown) => (v === "Yes" ? "Yes" : "No");
+
+  let facultyInvolved = body.facultyInvolved;
+  if (typeof facultyInvolved === "string") {
+    try {
+      facultyInvolved = JSON.parse(facultyInvolved);
+    } catch {
+      facultyInvolved = "NA";
+    }
+  }
+  if (Array.isArray(facultyInvolved) && facultyInvolved.length === 0) facultyInvolved = "NA";
+  if (!facultyInvolved) facultyInvolved = "NA";
+
+  let teamMembers = body.teamMembers;
+  if (typeof teamMembers === "string") {
+    try {
+      teamMembers = JSON.parse(teamMembers);
+    } catch {
+      teamMembers = [];
+    }
+  }
+  if (!Array.isArray(teamMembers)) teamMembers = [];
+
+  let otherIndustries = body.otherIndustries ?? [];
+  if (typeof otherIndustries === "string") {
+    try {
+      otherIndustries = JSON.parse(otherIndustries);
+    } catch {
+      otherIndustries = [];
+    }
+  }
+  if (!Array.isArray(otherIndustries)) otherIndustries = [];
+
+  let technologiesUtilized = body.technologiesUtilized ?? [];
+  if (typeof technologiesUtilized === "string") {
+    try {
+      technologiesUtilized = JSON.parse(technologiesUtilized);
+    } catch {
+      technologiesUtilized = [];
+    }
+  }
+  if (!Array.isArray(technologiesUtilized)) technologiesUtilized = [];
+
+  let externalFundingRaw = body.externalFunding ?? [];
+  if (typeof externalFundingRaw === "string") {
+    try {
+      const parsed = JSON.parse(externalFundingRaw);
+      externalFundingRaw = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      externalFundingRaw = [];
+    }
+  }
+  const externalFunding: unknown[] | null =
+    Array.isArray(externalFundingRaw) && externalFundingRaw.length === 0
+      ? null
+      : Array.isArray(externalFundingRaw)
+        ? externalFundingRaw
+        : [];
+
+  return {
+    email: body.email ?? "",
+    team_name: body.teamName ?? "",
+    your_name: body.yourName ?? "",
+    is_iitm: yesNo(body.isIITM),
+    roll_number: body.rollNumber ?? "",
+    college_name: body.collegeName ?? null,
+    current_occupation: body.currentOccupation ?? null,
+    phone_number: body.phoneNumber ?? "",
+    channel: body.channel ?? "",
+    channel_other: body.channelOther ?? null,
+    co_founders_count: Math.max(0, parseInt(String(body.coFoundersCount ?? "0"), 10) || 0),
+    faculty_involved: facultyInvolved,
+    prior_entrepreneurship_experience: yesNo(body.priorEntrepreneurshipExperience),
+    team_prior_entrepreneurship_experience: yesNo(body.teamPriorEntrepreneurshipExperience),
+    prior_experience_details: body.priorExperienceDetails ?? null,
+    mca_registered: yesNo(body.mcaRegistered),
+    external_funding: externalFunding,
+    currently_incubated: body.currentlyIncubated ?? null,
+    team_members: teamMembers,
+    nirmaan_can_help: body.nirmaanCanHelp ?? "",
+    pre_incubation_reason: body.preIncubationReason ?? "",
+    heard_about_startups: body.heardAboutStartups ?? "",
+    heard_about_nirmaan: body.heardAboutNirmaan ?? "",
+    problem_solving: body.problemSolving ?? "",
+    your_solution: body.yourSolution ?? "",
+    solution_type: body.solutionType ?? "",
+    solution_type_other: body.solutionTypeOther ?? null,
+    target_industry: body.targetIndustry ?? "",
+    other_industries: otherIndustries,
+    industry_other: body.industryOther ?? null,
+    other_industries_other: body.otherIndustriesOther ?? null,
+    technologies_utilized: technologiesUtilized,
+    other_technology_details: body.otherTechnologyDetails ?? null,
+    startup_stage: body.startupStage ?? "",
+    has_intellectual_property: yesNo(body.hasIntellectualProperty),
+    has_potential_intellectual_property: yesNo(body.hasPotentialIntellectualProperty),
+    ip_file_link: body.ipFileLink ?? null,
+    potential_ip_file_link: body.potentialIpFileLink ?? null,
+    nirmaan_presentation_link: body.nirmaanPresentationLink ?? "",
+    has_proof_of_concept: yesNo(body.hasProofOfConcept),
+    proof_of_concept_details: body.proofOfConceptDetails ?? null,
+    has_patents_or_papers: yesNo(body.hasPatentsOrPapers),
+    patents_or_papers_details: body.patentsOrPapersDetails ?? null,
+    seed_fund_utilization_plan: body.seedFundUtilizationPlan ?? "",
+    pitch_video_link: body.pitchVideoLink ?? "",
+    document1_link: body.document1Link ?? null,
+    document2_link: body.document2Link ?? null,
+    status: "draft",
+  };
+}
 
 async function sendReviewerInviteEmail(
   toEmail: string,
@@ -77,6 +197,59 @@ async function sendReviewerInviteEmail(
     return { success: true };
   } catch (error: any) {
     console.error("❌ Error sending reviewer invite email:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function sendResumeLinkEmail(
+  toEmail: string,
+  applicantName: string,
+  resumeToken: string,
+  baseUrl: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD;
+    if (!gmailUser || !gmailPass) {
+      console.warn(
+        "GMAIL_USER or GMAIL_APP_PASSWORD not set – resume link email skipped. Set both in .env to send emails."
+      );
+      return { success: false, error: "Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD)" };
+    }
+    const appUrl = (baseUrl || process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
+    const resumeLink = `${appUrl}/apply/resume?token=${encodeURIComponent(resumeToken)}`;
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: gmailUser, pass: gmailPass },
+    });
+    const emailHTML = `
+      <!DOCTYPE html>
+      <html>
+      <head><style>body{font-family:Arial,sans-serif;line-height:1.6;color:#333;}.container{max-width:600px;margin:0 auto;padding:20px;}.content{padding:20px;}.btn{display:inline-block;padding:12px 24px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px;margin:16px 0;}</style></head>
+      <body>
+        <div class="container">
+          <div class="content">
+            <p>Dear ${applicantName || "Applicant"},</p>
+            <p>You have saved a draft of your application. Use the link below to resume and continue where you left off. This link is valid for 30 days.</p>
+            <p><a href="${resumeLink}" class="btn">Resume application</a></p>
+            <p>Or copy this link: ${resumeLink}</p>
+            <p>Regards,<br>Team Nirmaan</p>
+          </div>
+        </div>
+      </body>
+      </html>`;
+    const emailText = `Dear ${applicantName || "Applicant"},\n\nYou have saved a draft of your application. Use the link below to resume:\n${resumeLink}\n\nThis link is valid for 30 days.\n\nRegards,\nTeam Nirmaan`;
+    await transporter.sendMail({
+      from: `"Nirmaan Pre-Incubation" <${gmailUser}>`,
+      to: toEmail,
+      subject: "Resume your application – Nirmaan Pre-Incubation",
+      text: emailText,
+      html: emailHTML,
+    });
+    console.log("[Backend] Resume link email sent to", toEmail);
+    return { success: true };
+  } catch (error: any) {
+    console.error("❌ Error sending resume link email:", error);
     return { success: false, error: error.message };
   }
 }
@@ -506,9 +679,198 @@ router.get("/", async (req: Request, res: Response) => {
         offset,
       },
     });
-  } catch (error) {
-    console.error("GET error:", error);
-    return res.status(500).json({ error: "Failed to fetch applications" });
+  } catch (err) {
+    console.error("GET applications list error:", err);
+    return res.status(500).json({
+      error: "Failed to fetch applications",
+      details: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/* =========================
+   GET /api/applications/resume?token=xxx
+   Load draft by resume token (for resume link).
+========================= */
+router.get("/resume", async (req: Request, res: Response) => {
+  try {
+    const token = (req.query.token as string)?.trim();
+    if (!token) {
+      return res.status(400).json({
+        error: "Missing token",
+        details: "Resume link token is required.",
+      });
+    }
+    const tokenHash = hashToken(token);
+    const { data: draft, error } = await supabase
+      .from("new_application")
+      .select("*")
+      .eq("resume_token_hash", tokenHash)
+      .eq("status", "draft")
+      .single();
+
+    if (error) {
+      console.error("[Backend] Draft resume lookup error:", error);
+      if (error.code === "PGRST116") {
+        return res.status(404).json({
+          error: "Draft not found",
+          details: "Invalid or expired resume link.",
+        });
+      }
+      return res.status(500).json({
+        error: "Failed to load draft",
+        details: error.message || String(error),
+      });
+    }
+
+    if (!draft) {
+      return res.status(404).json({
+        error: "Draft not found",
+        details: "Invalid or expired resume link.",
+      });
+    }
+
+    if (draft.resume_token_expiry && new Date(draft.resume_token_expiry) < new Date()) {
+      return res.status(410).json({
+        error: "Link expired",
+        details: "This resume link has expired.",
+      });
+    }
+
+    const { resume_token_hash, resume_token_expiry, ...safe } = draft;
+    return res.json({ draft: safe });
+  } catch (err) {
+    console.error("[Backend] Draft resume error:", err);
+    return res.status(500).json({
+      error: "Failed to load draft",
+      details: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+/* =========================
+   POST /api/applications/draft
+   Save draft (create or update). On first create: generate resume token, return for email.
+========================= */
+router.post("/draft", async (req: Request, res: Response) => {
+  try {
+    const body = req.body ?? {};
+    const applicationId = (body.applicationId as string)?.trim() || undefined;
+
+    let payload: ReturnType<typeof buildDraftPayload>;
+    try {
+      payload = buildDraftPayload(body);
+    } catch (err) {
+      console.error("[Backend] Draft buildDraftPayload error:", err);
+      return res.status(400).json({
+        error: "Invalid draft data",
+        details: err instanceof Error ? err.message : "Failed to build draft payload.",
+      });
+    }
+
+    if (applicationId) {
+      if (!uuidRegex.test(applicationId)) {
+        return res.status(400).json({
+          error: "Invalid application ID",
+          details: "applicationId must be a valid UUID.",
+        });
+      }
+      const { data, error } = await supabase
+        .from("new_application")
+        .update({
+          ...payload,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", applicationId)
+        .eq("status", "draft")
+        .select()
+        .single();
+
+      if (error) {
+        console.error("[Backend] Draft update error:", error);
+        const code = (error as { code?: string }).code;
+        if (code === "PGRST116") {
+          return res.status(404).json({
+            error: "Draft not found",
+            details: "No draft found with this ID or it was already submitted.",
+          });
+        }
+        // Postgres constraint violations → 400
+        if (code === "23505" || code === "23502" || code === "23503" || code === "22P02") {
+          return res.status(400).json({
+            error: "Invalid draft data",
+            details: error.message || String(error),
+          });
+        }
+        return res.status(500).json({
+          error: "Failed to save draft",
+          details: error.message || String(error),
+        });
+      }
+      if (!data) {
+        return res.status(404).json({
+          error: "Draft not found",
+          details: "No draft found with this ID.",
+        });
+      }
+      return res.json({ id: data.id, resumeToken: null, isNew: false });
+    }
+
+    const resumeToken = crypto.randomBytes(RESUME_TOKEN_BYTES).toString("hex");
+    const resumeTokenHash = hashToken(resumeToken);
+    const expiry = new Date();
+    expiry.setDate(expiry.getDate() + RESUME_TOKEN_EXPIRY_DAYS);
+
+    const { data, error } = await supabase
+      .from("new_application")
+      .insert({
+        ...payload,
+        resume_token_hash: resumeTokenHash,
+        resume_token_expiry: expiry.toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[Backend] Draft create error:", error);
+      const code = (error as { code?: string }).code;
+      // Postgres constraint violations → 400
+      if (code === "23505" || code === "23502" || code === "23503" || code === "22P02") {
+        return res.status(400).json({
+          error: "Invalid draft data",
+          details: error.message || String(error),
+        });
+      }
+      return res.status(500).json({
+        error: "Failed to save draft",
+        details: error.message || String(error),
+      });
+    }
+    if (!data) {
+      return res.status(500).json({
+        error: "Failed to save draft",
+        details: "No data returned after insert.",
+      });
+    }
+    const toEmail = (payload.email as string)?.trim();
+    if (toEmail) {
+      const appUrl = process.env.APP_URL || "http://localhost:3000";
+      const applicantName =
+        (payload.your_name as string) || (payload.team_name as string) || "Applicant";
+      await sendResumeLinkEmail(toEmail, applicantName, resumeToken, appUrl);
+    }
+    return res.json({
+      id: data.id,
+      resumeToken,
+      resumeTokenExpiry: expiry.toISOString(),
+      isNew: true,
+    });
+  } catch (err) {
+    console.error("[Backend] Draft save error:", err);
+    return res.status(500).json({
+      error: "Failed to save draft",
+      details: err instanceof Error ? err.message : String(err),
+    });
   }
 });
 
