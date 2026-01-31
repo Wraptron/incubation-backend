@@ -7,6 +7,59 @@ const router = Router();
 const uuidRegex =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Number of days after which a pending reviewer invite is auto-rejected */
+const REVIEWER_INVITE_EXPIRE_DAYS = 2;
+
+/**
+ * Auto-reject reviewer invites that have been pending for more than REVIEWER_INVITE_EXPIRE_DAYS.
+ * Run periodically (e.g. hourly) from the server.
+ */
+export async function expirePendingReviewerInvites(): Promise<{
+  updated: number;
+  error?: string;
+}> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - REVIEWER_INVITE_EXPIRE_DAYS);
+  const cutoffIso = cutoff.toISOString();
+
+  const { data: pendingRows, error: selectError } = await supabase
+    .from("application_reviewers")
+    .select("id")
+    .eq("invite_status", "pending")
+    .lt("invited_at", cutoffIso);
+
+  if (selectError) {
+    console.error("expirePendingReviewerInvites select error:", selectError);
+    return { updated: 0, error: selectError.message };
+  }
+
+  if (!pendingRows?.length) {
+    return { updated: 0 };
+  }
+
+  const now = new Date().toISOString();
+  const { data: updated, error: updateError } = await supabase
+    .from("application_reviewers")
+    .update({
+      invite_status: "rejected",
+      responded_at: now,
+    })
+    .eq("invite_status", "pending")
+    .lt("invited_at", cutoffIso)
+    .select("id");
+
+  if (updateError) {
+    console.error("expirePendingReviewerInvites update error:", updateError);
+    return { updated: 0, error: updateError.message };
+  }
+
+  const count = updated?.length ?? 0;
+  if (count > 0) {
+    console.log(`[cron] Auto-rejected ${count} pending reviewer invite(s) (older than ${REVIEWER_INVITE_EXPIRE_DAYS} days).`);
+  }
+  return { updated: count };
+}
+
 async function sendReviewerInviteEmail(
   toEmail: string,
   reviewerName: string,
