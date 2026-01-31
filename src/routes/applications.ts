@@ -1,7 +1,85 @@
 import { Router, Request, Response } from "express";
+import nodemailer from "nodemailer";
 import { supabase } from "../lib/supabase";
 
 const router = Router();
+
+const uuidRegex =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function sendReviewerInviteEmail(
+  toEmail: string,
+  reviewerName: string,
+  startupName: string,
+  applicationId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const gmailUser = process.env.GMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD;
+    if (!gmailUser || !gmailPass) {
+      console.warn(
+        "GMAIL_USER or GMAIL_APP_PASSWORD not set – reviewer invite email skipped. Set both in .env to send emails."
+      );
+      return { success: false, error: "Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD)" };
+    }
+
+    const appUrl = process.env.APP_URL || "http://localhost:3000";
+    const loginLink = `${appUrl}/login`;
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailPass,
+      },
+    });
+
+    const emailHTML = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
+          .content { padding: 20px; background-color: #fff; }
+          .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 10px 5px 10px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>Reviewer Assignment – Nirmaan Pre-Incubation</h2>
+          </div>
+          <div class="content">
+            <p>Dear ${reviewerName},</p>
+            <p>You have been assigned to review the following startup application:</p>
+            <p><strong>Startup: ${startupName}</strong></p>
+            <p>Please log in to accept or decline this assignment and submit your evaluation.</p>
+            <p>
+              <a href="${loginLink}" class="button">Login</a>
+            </p>
+            <p>Thanks,<br>Team Nirmaan</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: `"Nirmaan Pre-Incubation" <${gmailUser}>`,
+      to: toEmail,
+      subject: `You have been assigned to review: ${startupName}`,
+      html: emailHTML,
+      text: `Dear ${reviewerName},\n\nYou have been assigned to review the startup: ${startupName}.\n\nLog in here: ${loginLink}\n\nThanks,\nTeam Nirmaan`,
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    console.error("❌ Error sending reviewer invite email:", error);
+    return { success: false, error: error.message };
+  }
+}
 
 /* =========================
    POST /api/applications
@@ -144,7 +222,6 @@ router.post("/", async (req: Request, res: Response) => {
         your_name: body.yourName,
         is_iitm: body.isIITM,
         roll_number: body.rollNumber,
-        roll_number_other: body.rollNumberOther || null,
         college_name: body.collegeName || null,
         current_occupation: body.currentOccupation || null,
         phone_number: body.phoneNumber,
@@ -233,6 +310,116 @@ router.post("/", async (req: Request, res: Response) => {
     console.error("POST error:", error);
     return res.status(500).json({
       error: "Failed to process application",
+    });
+  }
+});
+
+/* =========================
+   POST /api/applications/:id/invite-reviewer
+   Manager invites one reviewer; sends email and creates assignment (pending).
+========================= */
+router.post("/:id/invite-reviewer", async (req: Request, res: Response) => {
+  try {
+    const { id: applicationId } = req.params;
+    const { reviewerId } = req.body;
+
+    if (
+      !applicationId ||
+      !uuidRegex.test(applicationId) ||
+      !reviewerId ||
+      !uuidRegex.test(reviewerId)
+    ) {
+      return res.status(400).json({
+        error: "Valid application ID and reviewer ID are required",
+      });
+    }
+
+    const { data: application, error: appError } = await supabase
+      .from("new_application")
+      .select("id, status, team_name")
+      .eq("id", applicationId)
+      .single();
+
+    if (appError || !application) {
+      return res.status(404).json({ error: "Application not found" });
+    }
+
+    if (application.status !== "pending") {
+      return res.status(400).json({
+        error: "Reviewer can only be invited for applications in pending status",
+      });
+    }
+
+    const { data: reviewer, error: reviewerError } = await supabase
+      .from("user_profiles")
+      .select("id, full_name, email_address")
+      .eq("id", reviewerId)
+      .eq("role", "reviewer")
+      .single();
+
+    if (reviewerError || !reviewer) {
+      return res.status(400).json({
+        error: "Reviewer not found or not a reviewer",
+      });
+    }
+
+    const { data: existing } = await supabase
+      .from("application_reviewers")
+      .select("id")
+      .eq("application_id", applicationId)
+      .eq("reviewer_id", reviewerId)
+      .maybeSingle();
+
+    if (existing) {
+      return res.status(409).json({
+        error: "This reviewer is already assigned to this application",
+      });
+    }
+
+    const invitedAt = new Date().toISOString();
+    const { error: insertError } = await supabase
+      .from("application_reviewers")
+      .insert({
+        application_id: applicationId,
+        reviewer_id: reviewerId,
+        invite_status: "pending",
+        invited_at: invitedAt,
+      });
+
+    if (insertError) {
+      console.error("Insert application_reviewers error:", insertError);
+      const hint = insertError.message?.includes("invite_status") ||
+        insertError.message?.includes("invited_at")
+        ? " Run the migration: supabase_application_reviewers_invite.sql (add invite_status, invited_at, responded_at to application_reviewers)."
+        : "";
+      return res.status(500).json({
+        error: "Failed to assign reviewer",
+        details: (insertError.message || String(insertError)) + hint,
+      });
+    }
+
+    const emailResult = await sendReviewerInviteEmail(
+      reviewer.email_address || "",
+      reviewer.full_name || "Reviewer",
+      application.team_name || "Startup",
+      applicationId
+    );
+
+    if (!emailResult.success) {
+      console.warn("Invite email failed but assignment created:", emailResult.error);
+    }
+
+    // Keep status as pending until at least 2 reviewers have accepted (handled in reviewer-respond)
+
+    return res.status(201).json({
+      message: "Reviewer invited successfully",
+      emailSent: emailResult.success,
+    });
+  } catch (error: any) {
+    console.error("POST invite-reviewer error:", error);
+    return res.status(500).json({
+      error: "Failed to invite reviewer",
+      details: error?.message || String(error),
     });
   }
 });
