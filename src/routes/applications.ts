@@ -280,7 +280,7 @@ async function sendReviewerInviteEmail(
 
     return { success: true };
   } catch (error: any) {
-    console.error("❌ Error sending reviewer invite email:", error);
+    console.error("Error sending reviewer invite email:", error);
     return { success: false, error: error.message };
   }
 }
@@ -1024,6 +1024,18 @@ router.get("/resume", async (req: Request, res: Response) => {
   }
 });
 
+/** True if error looks like a transient network/fetch failure (e.g. other side closed). */
+function isTransientNetworkError(err: unknown): boolean {
+  const msg = err && typeof err === "object" && "message" in err ? String((err as { message: unknown }).message) : String(err);
+  return (
+    /fetch failed/i.test(msg) ||
+    /other side closed/i.test(msg) ||
+    /SocketError/i.test(msg) ||
+    /UND_ERR_SOCKET/i.test(msg) ||
+    /ECONNRESET|ETIMEDOUT|ECONNREFUSED/.test(msg)
+  );
+}
+
 /* =========================
    POST /api/applications/draft
    Save draft (create or update). On first create: generate resume token, return for email.
@@ -1051,16 +1063,26 @@ router.post("/draft", async (req: Request, res: Response) => {
           details: "applicationId must be a valid UUID.",
         });
       }
-      const { data, error } = await supabase
-        .from("new_application")
-        .update({
-          ...payload,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", applicationId)
-        .eq("status", "draft")
-        .select()
-        .single();
+      const doUpdate = async () =>
+        supabase
+          .from("new_application")
+          .update({
+            ...payload,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", applicationId)
+          .eq("status", "draft")
+          .select()
+          .single();
+
+      let { data, error } = await doUpdate();
+      if (error && isTransientNetworkError(error)) {
+        console.warn("[Backend] Draft update transient error, retrying once:", error.message);
+        await new Promise((r) => setTimeout(r, 500));
+        const retry = await doUpdate();
+        data = retry.data;
+        error = retry.error;
+      }
 
       if (error) {
         console.error("[Backend] Draft update error:", error);
@@ -1078,9 +1100,12 @@ router.post("/draft", async (req: Request, res: Response) => {
             details: error.message || String(error),
           });
         }
+        const details = isTransientNetworkError(error)
+          ? "Connection issue. Please try again."
+          : error.message || String(error);
         return res.status(500).json({
           error: "Failed to save draft",
-          details: error.message || String(error),
+          details,
         });
       }
       if (!data) {
@@ -1097,15 +1122,25 @@ router.post("/draft", async (req: Request, res: Response) => {
     const expiry = new Date();
     expiry.setDate(expiry.getDate() + RESUME_TOKEN_EXPIRY_DAYS);
 
-    const { data, error } = await supabase
-      .from("new_application")
-      .insert({
-        ...payload,
-        resume_token_hash: resumeTokenHash,
-        resume_token_expiry: expiry.toISOString(),
-      })
-      .select()
-      .single();
+    const doInsert = async () =>
+      supabase
+        .from("new_application")
+        .insert({
+          ...payload,
+          resume_token_hash: resumeTokenHash,
+          resume_token_expiry: expiry.toISOString(),
+        })
+        .select()
+        .single();
+
+    let { data, error } = await doInsert();
+    if (error && isTransientNetworkError(error)) {
+      console.warn("[Backend] Draft create transient error, retrying once:", error.message);
+      await new Promise((r) => setTimeout(r, 500));
+      const retry = await doInsert();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error("[Backend] Draft create error:", error);
@@ -1117,9 +1152,12 @@ router.post("/draft", async (req: Request, res: Response) => {
           details: error.message || String(error),
         });
       }
+      const details = isTransientNetworkError(error)
+        ? "Connection issue. Please try again."
+        : error.message || String(error);
       return res.status(500).json({
         error: "Failed to save draft",
-        details: error.message || String(error),
+        details,
       });
     }
     if (!data) {
