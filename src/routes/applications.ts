@@ -230,13 +230,18 @@ async function sendReviewerInviteEmail(
     const appUrl = process.env.APP_URL || "https://traktor.sieiitm.org";
     const loginLink = `${appUrl}/login`;
 
+    const nodemailer = require("nodemailer");
+
     const transporter = nodemailer.createTransport({
-      service: "gmail",
+      host: "smtpout.secureserver.net",
+      port: 465,
+      secure: true, // SSL
       auth: {
-        user: gmailUser,
-        pass: gmailPass,
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
       },
     });
+    
 
     const emailHTML = `
       <!DOCTYPE html>
@@ -322,10 +327,15 @@ async function sendManagerReviewerResponseEmail(
         : `The reviewer <strong>${reviewerName}</strong> has <strong>declined</strong> the evaluation request for the startup <strong>${startupName}</strong>. Please assign another reviewer if needed.`;
     }
 
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: gmailUser, pass: gmailPass },
-    });
+      const transporter = nodemailer.createTransport({
+        host: "smtpout.secureserver.net",
+        port: 465,
+        secure: true, // SSL
+        auth: {
+          user: process.env.GMAIL_USER,
+          pass: process.env.GMAIL_APP_PASSWORD,
+        },
+      });
 
     const emailHTML = `
       <!DOCTYPE html>
@@ -387,9 +397,14 @@ async function sendResumeLinkEmail(
     }
     const appUrl = (baseUrl || process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
     const resumeLink = `${appUrl}/apply/resume?token=${encodeURIComponent(resumeToken)}`;
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: gmailUser, pass: gmailPass },
+     const transporter = nodemailer.createTransport({
+      host: "smtpout.secureserver.net",
+      port: 465,
+      secure: true, // SSL
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
     });
     const emailHTML = `
       <!DOCTYPE html>
@@ -459,7 +474,6 @@ router.post("/", async (req: Request, res: Response) => {
       "hasProofOfConcept",
       "hasPatentsOrPapers",
       "seedFundUtilizationPlan",
-      "pitchVideoLink",
     ];
 
     for (const field of requiredFields) {

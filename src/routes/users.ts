@@ -58,11 +58,13 @@ async function sendWelcomeEmail(
     `);
 
     // Configure email transporter
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
+   const transporter = nodemailer.createTransport({
+      host: "smtpout.secureserver.net",
+      port: 465,
+      secure: true, // SSL
       auth: {
-        user: process.env.GMAIL_USER || "wraptron@gmail.com",
-        pass: process.env.GMAIL_APP_PASSWORD, // App-specific password
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
       },
     });
 
