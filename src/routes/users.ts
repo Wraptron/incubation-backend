@@ -141,7 +141,7 @@ Team Nirmaan
 
     // Send email
     const info = await transporter.sendMail({
-      from: `"Nirmaan Pre-Incubation" <${process.env.GMAIL_USER || "wraptron@gmail.com"}>`,
+      from: `"Nirmaan Pre-Incubation" <${process.env.GMAIL_USER}>`,
       to: email,
       subject: "Welcome to Nirmaan Pre-Incubation Program",
       text: emailText,
