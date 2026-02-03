@@ -6,14 +6,13 @@ import applicationsRouter, { expirePendingReviewerInvites } from "./routes/appli
 import evaluationsRouter from "./routes/evaluations";
 import usersRouter from "./routes/users";
 
-// Load environment-specific .env file
+// Load env: base .env first, then env-specific file (e.g. .env.development) so local .env overrides
 const env = process.env.NODE_ENV || "development";
 const envFile = `.env.${env}`;
 const envPath = path.resolve(process.cwd(), envFile);
 
-// Try to load environment-specific file, fallback to .env
-dotenv.config({ path: envPath });
-dotenv.config(); // Fallback to .env if env-specific file doesn't exist
+dotenv.config(); // Load .env first (local overrides)
+dotenv.config({ path: envPath, override: false }); // Then env-specific, without overwriting .env
 
 console.log(`🌍 Environment: ${env}`);
 console.log(`📄 Loading env from: ${envPath}`);

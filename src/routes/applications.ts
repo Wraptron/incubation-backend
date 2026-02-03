@@ -220,13 +220,6 @@ async function sendReviewerInviteEmail(
   try {
     const gmailUser = process.env.GMAIL_USER;
     const gmailPass = process.env.GMAIL_APP_PASSWORD;
-    if (!gmailUser || !gmailPass) {
-      console.warn(
-        "GMAIL_USER or GMAIL_APP_PASSWORD not set – reviewer invite email skipped. Set both in .env to send emails."
-      );
-      return { success: false, error: "Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD)" };
-    }
-
     const appUrl = process.env.APP_URL || "https://traktor.sieiitm.org";
     const loginLink = `${appUrl}/login`;
 
@@ -286,24 +279,16 @@ async function sendReviewerInviteEmail(
 
 /** Send email to managers when a reviewer accepts/rejects or invite is auto-rejected */
 async function sendManagerReviewerResponseEmail(
-  managerEmails: string[],
+  reviewerEmails: string[],
   reviewerName: string,
   startupName: string,
   applicationId: string,
   accepted: boolean,
   autoRejected?: boolean
 ): Promise<{ success: boolean; error?: string }> {
-  if (!managerEmails.length) return { success: true };
   try {
     const gmailUser = process.env.GMAIL_USER;
     const gmailPass = process.env.GMAIL_APP_PASSWORD;
-    if (!gmailUser || !gmailPass) {
-      console.warn(
-        "GMAIL_USER or GMAIL_APP_PASSWORD not set – manager notification email skipped."
-      );
-      return { success: false, error: "Email not configured" };
-    }
-
     const appUrl = process.env.APP_URL || "https://traktor.sieiitm.org";
     const applicationLink = `${appUrl}/dashboard/applications/${applicationId}`;
 
@@ -355,10 +340,9 @@ async function sendManagerReviewerResponseEmail(
       </html>
     `;
 
-    const toList = managerEmails.filter(Boolean).join(", ");
     await transporter.sendMail({
-      from: `"Nirmaan Pre-Incubation" <${gmailUser}>`,
-      to: toList,
+      from: `"Nirmaan Pre-Incubation" <${reviewerEmails}>`,
+      to: gmailUser,
       subject,
       html: emailHTML,
       text: message.replace(/<[^>]*>/g, "") + `\nView application: ${applicationLink}`,
@@ -380,12 +364,6 @@ async function sendResumeLinkEmail(
   try {
     const gmailUser = process.env.GMAIL_USER;
     const gmailPass = process.env.GMAIL_APP_PASSWORD;
-    if (!gmailUser || !gmailPass) {
-      console.warn(
-        "GMAIL_USER or GMAIL_APP_PASSWORD not set – resume link email skipped. Set both in .env to send emails."
-      );
-      return { success: false, error: "Email not configured (GMAIL_USER / GMAIL_APP_PASSWORD)" };
-    }
     const appUrl = (baseUrl || process.env.APP_URL || "http://localhost:3000").replace(/\/$/, "");
     const resumeLink = `${appUrl}/apply/resume?token=${encodeURIComponent(resumeToken)}`;
     const transporter = nodemailer.createTransport({
