@@ -68,18 +68,14 @@ export async function expirePendingReviewerInvites(): Promise<{
         .single();
       const { data: reviewer } = await supabase
         .from("user_profiles")
-        .select("full_name")
+        .select("full_name, email_address")
         .eq("id", reviewer_id)
         .single();
-      const { data: managers } = await supabase
-        .from("user_profiles")
-        .select("email_address")
-        .eq("role", "manager")
-        .not("email_address", "is", null);
-      const emails = (managers ?? []).map((m) => m.email_address).filter(Boolean) as string[];
-      if (emails.length) {
+        
+      // Send from reviewer email to gmailUser (system inbox) for auto-expired invites
+      if (reviewer?.email_address) {
         await sendManagerReviewerResponseEmail(
-          emails,
+          reviewer.email_address,
           reviewer?.full_name ?? "Reviewer",
           app?.team_name ?? "Startup",
           application_id,
@@ -239,7 +235,7 @@ async function sendReviewerInviteEmail(
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
           .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
           .content { padding: 20px; background-color: #fff; }
-          .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 10px 5px 10px 0; }
+          .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: #fff; text-decoration: none; border-radius: 5px; margin: 10px 5px 10px 0; }
         </style>
       </head>
       <body>
@@ -278,8 +274,9 @@ async function sendReviewerInviteEmail(
 }
 
 /** Send email to managers when a reviewer accepts/rejects or invite is auto-rejected */
+/** Send email from reviewer's address to gmailUser when a reviewer accepts/rejects or invite is auto-rejected */
 async function sendManagerReviewerResponseEmail(
-  reviewerEmails: string[],
+  reviewerEmail: string,
   reviewerName: string,
   startupName: string,
   applicationId: string,
@@ -322,7 +319,7 @@ async function sendManagerReviewerResponseEmail(
           .container { max-width: 600px; margin: 0 auto; padding: 20px; }
           .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
           .content { padding: 20px; background-color: #fff; }
-          .button { display: inline-block; padding: 10px 20px; background-color: #2563eb; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px; }
+          .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: #fff; text-decoration: none; border-radius: 5px; margin-top: 10px; }
         </style>
       </head>
       <body>
@@ -341,7 +338,7 @@ async function sendManagerReviewerResponseEmail(
     `;
 
     await transporter.sendMail({
-      from: `"Nirmaan Pre-Incubation" <${reviewerEmails}>`,
+      from: `"${reviewerName}" <${reviewerEmail}>`,
       to: gmailUser,
       subject,
       html: emailHTML,
@@ -412,15 +409,16 @@ router.post("/", async (req: Request, res: Response) => {
     const body = req.body;
 
     // Validate required fields based on database schema
+    // NOTE: `rollNumber` is required only for IITM applicants.
     const requiredFields = [
       "email",
       "teamName",
       "yourName",
       "isIITM",
-      "rollNumber",
       "phoneNumber",
       "channel",
       "coFoundersCount",
+      "facultyInvolved",
       "priorEntrepreneurshipExperience",
       "teamPriorEntrepreneurshipExperience",
       "mcaRegistered",
@@ -443,6 +441,10 @@ router.post("/", async (req: Request, res: Response) => {
       "pitchVideoLink",
     ];
 
+    if (String(body.isIITM || "").trim() === "Yes") {
+      requiredFields.push("rollNumber");
+    }
+
     for (const field of requiredFields) {
       // Special handling for array fields
       if (field === 'teamMembers') {
@@ -457,6 +459,32 @@ router.post("/", async (req: Request, res: Response) => {
         if (!Array.isArray(teamMembersValue) || teamMembersValue.length === 0) {
           return res.status(400).json({
             error: `Missing required field: ${field}. At least one team member is required.`,
+          });
+        }
+      } else if (field === 'facultyInvolved') {
+        let facultyValue: any = body[field];
+        if (typeof facultyValue === 'string') {
+          const trimmed = facultyValue.trim();
+          // Allow explicit NA markers
+          if (trimmed.toUpperCase() === 'NA' || trimmed.toUpperCase() === 'N/A') {
+            continue;
+          }
+          try {
+            facultyValue = JSON.parse(trimmed);
+          } catch {
+            facultyValue = null;
+          }
+        }
+
+        if (Array.isArray(facultyValue)) {
+          if (facultyValue.length === 0) {
+            return res.status(400).json({
+              error: "Missing required field: facultyInvolved. If no faculty, enter N/A.",
+            });
+          }
+        } else if (!facultyValue || String(facultyValue).trim() === '') {
+          return res.status(400).json({
+            error: "Missing required field: facultyInvolved. If no faculty, enter N/A.",
           });
         }
       } else if (!body[field] || String(body[field]).trim() === "") {
@@ -544,7 +572,7 @@ router.post("/", async (req: Request, res: Response) => {
         team_name: body.teamName,
         your_name: body.yourName,
         is_iitm: body.isIITM,
-        roll_number: body.rollNumber,
+        roll_number: body.rollNumber || "N/A",
         college_name: body.collegeName || null,
         current_occupation: body.currentOccupation || null,
         phone_number: body.phoneNumber,
@@ -811,7 +839,7 @@ router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
       }
     }
 
-    // Notify managers
+    // Notify: send from reviewer email to gmailUser (system inbox)
     const { data: application } = await supabase
       .from("new_application")
       .select("team_name")
@@ -819,18 +847,12 @@ router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
       .single();
     const { data: reviewer } = await supabase
       .from("user_profiles")
-      .select("full_name")
+      .select("full_name, email_address")
       .eq("id", reviewerId)
       .single();
-    const { data: managers } = await supabase
-      .from("user_profiles")
-      .select("email_address")
-      .eq("role", "manager")
-      .not("email_address", "is", null);
-    const managerEmails = (managers ?? []).map((m) => m.email_address).filter(Boolean) as string[];
-    if (managerEmails.length) {
+    if (reviewer?.email_address) {
       await sendManagerReviewerResponseEmail(
-        managerEmails,
+        reviewer.email_address,
         reviewer?.full_name ?? "Reviewer",
         application?.team_name ?? "Startup",
         applicationId,
