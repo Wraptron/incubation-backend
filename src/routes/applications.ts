@@ -8,19 +8,19 @@ const router = Router();
 const uuidRegex =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Number of minutes after which a pending reviewer invite is auto-rejected */
-const REVIEWER_INVITE_EXPIRE_MINUTES = 5;
+/** Number of days after which a pending reviewer invite is auto-rejected */
+const REVIEWER_INVITE_EXPIRE_DAYS = 2;
 
 /**
- * Auto-reject reviewer invites that have been pending for more than REVIEWER_INVITE_EXPIRE_MINUTES.
- * Run periodically (e.g. every minute) from the server.
+ * Auto-reject reviewer invites that have been pending for more than REVIEWER_INVITE_EXPIRE_DAYS days.
+ * Run periodically (e.g. hourly) from the server.
  */
 export async function expirePendingReviewerInvites(): Promise<{
   updated: number;
   error?: string;
 }> {
   const cutoff = new Date();
-  cutoff.setMinutes(cutoff.getMinutes() - REVIEWER_INVITE_EXPIRE_MINUTES);
+  cutoff.setDate(cutoff.getDate() - REVIEWER_INVITE_EXPIRE_DAYS);
   const cutoffIso = cutoff.toISOString();
 
   const { data: pendingRows, error: selectError } = await supabase
@@ -56,7 +56,7 @@ export async function expirePendingReviewerInvites(): Promise<{
 
   const count = updated?.length ?? 0;
   if (count > 0) {
-    console.log(`[cron] Auto-rejected ${count} pending reviewer invite(s) (older than ${REVIEWER_INVITE_EXPIRE_MINUTES} minutes).`);
+    console.log(`[cron] Auto-rejected ${count} pending reviewer invite(s) (older than ${REVIEWER_INVITE_EXPIRE_DAYS} days).`);
     // Notify managers for each auto-rejected invite
     for (const row of updated ?? []) {
       const { application_id, reviewer_id } = row as { application_id: string; reviewer_id: string };
@@ -293,7 +293,7 @@ async function sendManagerReviewerResponseEmail(
     let message: string;
     if (autoRejected) {
       subject = `Reviewer invite auto-expired: ${reviewerName} – ${startupName}`;
-      message = `The evaluation request for <strong>${reviewerName}</strong> for the startup <strong>${startupName}</strong> was automatically rejected after ${REVIEWER_INVITE_EXPIRE_MINUTES} minutes (no response). Please assign a new reviewer if needed.`;
+      message = `The evaluation request for <strong>${reviewerName}</strong> for the startup <strong>${startupName}</strong> was automatically rejected after ${REVIEWER_INVITE_EXPIRE_DAYS} days (no response). Please assign a new reviewer if needed.`;
     } else {
       subject = accepted
         ? `Reviewer accepted: ${reviewerName} – ${startupName}`
