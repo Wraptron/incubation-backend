@@ -59,8 +59,8 @@ const baseUrl =
     ? process.env.BACKEND_URL || `http://your-staging-backend-url:${PORT}`
     : `http://localhost:${PORT}`;
 
-// Run reviewer invite expiry on startup and every minute (pending invites older than 5 minutes → auto-rejected)
-const REVIEWER_INVITE_EXPIRE_INTERVAL_MS = 60 * 1000;
+// Run reviewer invite expiry on startup and every hour (pending invites older than 2 days → auto-rejected)
+const REVIEWER_INVITE_EXPIRE_INTERVAL_MS = 60 * 60 * 1000;
 expirePendingReviewerInvites().catch((err) =>
   console.warn("Startup reviewer invite expiry check failed:", err)
 );
