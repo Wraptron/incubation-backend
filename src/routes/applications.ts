@@ -344,8 +344,9 @@ async function sendManagerReviewerResponseEmail(
       html: emailHTML,
       text: message.replace(/<[^>]*>/g, "") + `\nView application: ${applicationLink}`,
     });
-
+    console.log("[Backend] Manager reviewer-response email sent to", gmailUser);
     return { success: true };
+    
   } catch (error: any) {
     console.error("❌ Error sending manager reviewer-response email:", error);
     return { success: false, error: error.message };
