@@ -281,7 +281,8 @@ async function sendManagerReviewerResponseEmail(
   startupName: string,
   applicationId: string,
   accepted: boolean,
-  autoRejected?: boolean
+  autoRejected?: boolean,
+  rejectReason?: string | null
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const gmailUser = process.env.GMAIL_USER;
@@ -300,7 +301,7 @@ async function sendManagerReviewerResponseEmail(
         : `Reviewer declined: ${reviewerName} – ${startupName}`;
       message = accepted
         ? `The reviewer <strong>${reviewerName}</strong> has <strong>accepted</strong> the evaluation request for the startup <strong>${startupName}</strong>.`
-        : `The reviewer <strong>${reviewerName}</strong> has <strong>declined</strong> the evaluation request for the startup <strong>${startupName}</strong>. Please assign another reviewer if needed.`;
+        : `The reviewer <strong>${reviewerName}</strong> has <strong>declined</strong> the evaluation request for the startup <strong>${startupName}</strong>. Please assign another reviewer if needed.${rejectReason ? `<br><br><strong>Reason for decline:</strong><br>${rejectReason.replace(/\n/g, '<br>')}` : ''}`;
     }
 
     const transporter = nodemailer.createTransport({
@@ -784,6 +785,7 @@ router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
   try {
     const { id: applicationId } = req.params;
     const accept = req.body.accept === true;
+    const rejectReason = req.body.rejectReason || null;
 
     if (!applicationId || !uuidRegex.test(applicationId)) {
       return res.status(400).json({ error: "Invalid application ID" });
@@ -809,12 +811,22 @@ router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
 
     const reviewerId = user.id;
 
+    const updateData: {
+      invite_status: string;
+      responded_at: string;
+      reject_reason?: string | null;
+    } = {
+      invite_status: accept ? "accepted" : "rejected",
+      responded_at: new Date().toISOString(),
+    };
+
+    if (!accept && rejectReason) {
+      updateData.reject_reason = rejectReason;
+    }
+
     const { error: updateError } = await supabase
       .from("application_reviewers")
-      .update({
-        invite_status: accept ? "accepted" : "rejected",
-        responded_at: new Date().toISOString(),
-      })
+      .update(updateData)
       .eq("application_id", applicationId)
       .eq("reviewer_id", reviewerId);
 
@@ -858,7 +870,8 @@ router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
         application?.team_name ?? "Startup",
         applicationId,
         accept,
-        false
+        false,
+        !accept ? rejectReason : undefined
       );
     }
 
