@@ -894,6 +894,50 @@ router.put(
       }
 
       console.log("Evaluation saved successfully:", data?.id);
+
+      // If all assigned accepted reviewers have submitted, set application status to "evaluated"
+      const { data: acceptedAssignments, error: acceptedError } = await supabase
+        .from("application_reviewers")
+        .select("reviewer_id")
+        .eq("application_id", finalApplicationId)
+        .eq("invite_status", "accepted");
+      
+      if (acceptedError) {
+        console.error("Error fetching accepted reviewers:", acceptedError);
+      } else {
+        const acceptedCount = acceptedAssignments?.length ?? 0;
+
+        const { data: evalsForApp, error: evalsError } = await supabase
+          .from("application_evaluations")
+          .select("reviewer_id")
+          .eq("application_id", finalApplicationId);
+        
+        if (evalsError) {
+          console.error("Error fetching evaluations:", evalsError);
+        } else {
+          // Count unique reviewers who have submitted evaluations
+          const uniqueReviewerIds = new Set(evalsForApp?.map((e: any) => e.reviewer_id) ?? []);
+          const evalCount = uniqueReviewerIds.size;
+          
+          console.log(`Checking evaluation completion: ${evalCount} unique reviewers evaluated, ${acceptedCount} accepted reviewers`);
+
+          if (acceptedCount > 0 && evalCount >= acceptedCount) {
+            const { error: updateError } = await supabase
+              .from("new_application")
+              .update({ status: "evaluated" })
+              .eq("id", finalApplicationId);
+            
+            if (updateError) {
+              console.error("Error updating application status to evaluated:", updateError);
+            } else {
+              console.log("All evaluations complete; application status set to evaluated:", finalApplicationId);
+            }
+          } else {
+              console.log(`Not all evaluations complete yet: ${evalCount}/${acceptedCount}`);
+          }
+        }
+      }
+
       return res.json({
         message: existing
           ? "Evaluation updated successfully"
