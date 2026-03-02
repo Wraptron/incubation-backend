@@ -609,14 +609,6 @@ router.put(
 
       const { applicationId } = req.params;
       const body = req.body;
-      console.log("[Backend] Received evaluation data:", {
-        applicationId: body?.applicationId ?? applicationId,
-        needScore: body?.needScore,
-        noveltyScore: body?.noveltyScore,
-        feasibilityScalabilityScore: body?.feasibilityScalabilityScore,
-        marketPotentialScore: body?.marketPotentialScore,
-        impactScore: body?.impactScore,
-      });
 
       // Validate request body
       if (!body || typeof body !== "object") {
@@ -680,12 +672,7 @@ router.put(
         );
       }
 
-      console.log(
-        "Validated IDs - Application:",
-        finalApplicationId,
-        "Reviewer:",
-        reviewerId
-      );
+      
 
       // Validate required fields
       const requiredFields = [
@@ -773,10 +760,9 @@ router.put(
         );
       }
 
-      console.log("Reviewer assignment verified:", assignment.id);
+      
 
       // Check if evaluation exists
-      console.log("Checking if evaluation exists...");
       const { data: existing, error: existingError } = await supabase
         .from("application_evaluations")
         .select("id")
@@ -893,7 +879,6 @@ router.put(
         );
       }
 
-      console.log("Evaluation saved successfully:", data?.id);
 
       // If all assigned accepted reviewers have submitted, set application status to "evaluated"
       const { data: acceptedAssignments, error: acceptedError } = await supabase
@@ -919,7 +904,6 @@ router.put(
           const uniqueReviewerIds = new Set(evalsForApp?.map((e: any) => e.reviewer_id) ?? []);
           const evalCount = uniqueReviewerIds.size;
           
-          console.log(`Checking evaluation completion: ${evalCount} unique reviewers evaluated, ${acceptedCount} accepted reviewers`);
 
           if (acceptedCount > 0 && evalCount >= acceptedCount) {
             const { error: updateError } = await supabase
@@ -929,8 +913,6 @@ router.put(
             
             if (updateError) {
               console.error("Error updating application status to evaluated:", updateError);
-            } else {
-              console.log("All evaluations complete; application status set to evaluated:", finalApplicationId);
             }
           } else {
               console.log(`Not all evaluations complete yet: ${evalCount}/${acceptedCount}`);

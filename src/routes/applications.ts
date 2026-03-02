@@ -393,7 +393,7 @@ async function sendResumeLinkEmail(
       text: emailText,
       html: emailHTML,
     });
-    console.log("[Backend] Resume link email sent to", toEmail);
+    // console.log("[Backend] Resume link email sent to", toEmail);
     return { success: true };
   } catch (error: any) {
     console.error("❌ Error sending resume link email:", error);
@@ -825,13 +825,17 @@ router.post("/:id/reviewer-respond", async (req: Request, res: Response) => {
     }
 
     if (accept) {
-      const { data: acceptedRows } = await supabase
+      const { data: allRows } = await supabase
         .from("application_reviewers")
-        .select("id")
-        .eq("application_id", applicationId)
-        .eq("invite_status", "accepted");
-
-      if (acceptedRows && acceptedRows.length >= 2) {
+        .select("reviewer_id, invite_status")
+        .eq("application_id", applicationId);
+      const totalAssignees = allRows?.length ?? 0;
+      const allAccepted =
+        totalAssignees >= 2 &&
+        (allRows ?? []).every(
+          (r) => (r.invite_status ?? "pending") === "accepted"
+        );
+      if (allAccepted) {
         await supabase
           .from("new_application")
           .update({ status: "under_review" })
