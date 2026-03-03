@@ -5,7 +5,6 @@ const router = Router();
 
 // Log every request to this router (so we can confirm backend is hit)
 router.use((req, _res, next) => {
-  console.log(`[Backend] Evaluations request: ${req.method} ${req.originalUrl || req.url}`);
   next();
 });
 
@@ -41,13 +40,7 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       // Log the request at the start
-      console.log("=== Evaluation GET Request ===");
-      console.log("URL:", req.url);
-      console.log("Method:", req.method);
-      console.log("Params:", req.params);
-      console.log("Headers:", {
-        "x-reviewer-id": req.headers["x-reviewer-id"],
-      });
+     
 
       const { applicationId } = req.params;
 
@@ -77,12 +70,7 @@ router.get(
         return sendError(res, 401, "Reviewer ID is required", "x-reviewer-id header is missing or invalid");
       }
 
-      console.log(
-        "Validated IDs - Application:",
-        applicationId,
-        "Reviewer:",
-        reviewerId
-      );
+      
 
       const { data: evaluation, error } = await supabase
         .from("application_evaluations")
@@ -140,7 +128,6 @@ router.get(
       }
 
       console.log("Fetching all evaluations for application:", applicationId);
-
       const { data: evaluations, error } = await supabase
         .from("application_evaluations")
         .select("*")
@@ -593,19 +580,7 @@ router.put(
   "/application/:applicationId",
   async (req: Request, res: Response) => {
     try {
-      // Log the request at the start
-      console.log("=== Evaluation PUT Request ===");
-      console.log("URL:", req.url);
-      console.log("Original URL:", req.originalUrl);
-      console.log("Base URL:", req.baseUrl);
-      console.log("Path:", req.path);
-      console.log("Method:", req.method);
-      console.log("Params:", req.params);
-      console.log("Params keys:", Object.keys(req.params));
-      console.log("Headers:", {
-        "x-reviewer-id": req.headers["x-reviewer-id"],
-        "content-type": req.headers["content-type"],
-      });
+      
 
       const { applicationId } = req.params;
       const body = req.body;
@@ -720,7 +695,6 @@ router.put(
       }
 
       // Check if reviewer is assigned and has accepted (reviewerId already validated above with UUID regex)
-      console.log("Checking reviewer assignment...");
       const { data: assignment, error: assignmentError } = await supabase
         .from("application_reviewers")
         .select("id, invite_status")
@@ -880,17 +854,17 @@ router.put(
       }
 
 
-      // If all assigned accepted reviewers have submitted, set application status to "evaluated"
-      const { data: acceptedAssignments, error: acceptedError } = await supabase
+      // If all assigned reviewers have submitted, set application status to "evaluated"
+      // Count all assigned reviewers (regardless of invite_status) - a reviewer can evaluate even if still "pending"
+      const { data: assignedReviewers, error: assignedError } = await supabase
         .from("application_reviewers")
         .select("reviewer_id")
-        .eq("application_id", finalApplicationId)
-        .eq("invite_status", "accepted");
+        .eq("application_id", finalApplicationId);
       
-      if (acceptedError) {
-        console.error("Error fetching accepted reviewers:", acceptedError);
+      if (assignedError) {
+        console.error("Error fetching assigned reviewers:", assignedError);
       } else {
-        const acceptedCount = acceptedAssignments?.length ?? 0;
+        const assignedCount = assignedReviewers?.length ?? 0;
 
         const { data: evalsForApp, error: evalsError } = await supabase
           .from("application_evaluations")
@@ -905,7 +879,7 @@ router.put(
           const evalCount = uniqueReviewerIds.size;
           
 
-          if (acceptedCount > 0 && evalCount >= acceptedCount) {
+          if (assignedCount > 0 && evalCount >= assignedCount) {
             const { error: updateError } = await supabase
               .from("new_application")
               .update({ status: "evaluated" })
@@ -915,7 +889,7 @@ router.put(
               console.error("Error updating application status to evaluated:", updateError);
             }
           } else {
-              console.log(`Not all evaluations complete yet: ${evalCount}/${acceptedCount}`);
+              console.log(`Not all evaluations complete yet: ${evalCount}/${assignedCount}`);
           }
         }
       }

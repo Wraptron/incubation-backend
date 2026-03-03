@@ -697,9 +697,9 @@ router.post("/:id/invite-reviewer", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Application not found" });
     }
 
-    if (application.status !== "pending") {
+    if (application.status !== "pending" && application.status !== "under_review") {
       return res.status(400).json({
-        error: "Reviewer can only be invited for applications in pending status",
+        error: "Reviewer can only be invited for applications in pending or under_review status",
       });
     }
 
