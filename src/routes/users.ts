@@ -5,6 +5,18 @@ import nodemailer from "nodemailer";
 
 const router = Router();
 
+function createSmtpTransporter() {
+  return nodemailer.createTransport({
+    host: "smtpout.secureserver.net",
+    port: 465,
+    secure: true,
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_APP_PASSWORD,
+    },
+  });
+}
+
 /**
  * Generate a random password
  */
@@ -58,15 +70,7 @@ async function sendWelcomeEmail(
     `);
 
     // Configure email transporter
-   const transporter = nodemailer.createTransport({
-      host: "smtpout.secureserver.net",
-      port: 465,
-      secure: true, // SSL
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
-    });
+    const transporter = createSmtpTransporter();
 
     // Email template based on the provided format
     const emailHTML = `
@@ -152,6 +156,89 @@ Team Nirmaan
     return { success: true };
   } catch (error: any) {
     console.error("❌ Error sending email:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+async function sendForgotPasswordEmail(
+  email: string,
+  fullName: string,
+  resetLink: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const transporter = createSmtpTransporter();
+    const loginUrl = `${process.env.APP_URL || "https://traktor.sieiitm.org"}/login`;
+    const displayName = fullName || "User";
+
+    const emailHTML = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #f4f4f4; padding: 20px; text-align: center; }
+          .content { padding: 20px; background-color: #fff; }
+          .footer { padding: 20px; text-align: center; color: #666; font-size: 12px; }
+          .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: #fff; text-decoration: none; border-radius: 5px; margin: 10px 0; }
+          .hint { background-color: #f9f9f9; padding: 12px; border-left: 4px solid #4CAF50; margin: 16px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>Password Reset Request</h2>
+          </div>
+          <div class="content">
+            <p>Dear ${displayName},</p>
+            <p>We received a request to reset your password for your Nirmaan account.</p>
+            <p style="text-align: center;">
+              <a href="${resetLink}" class="button">Reset Password</a>
+            </p>
+            <div class="hint">
+              If you did not request this, you can ignore this email.
+            </div>
+            <p>After resetting, you can sign in at: <a href="${loginUrl}">${loginUrl}</a></p>
+            <p>Thanks,<br/>Team Nirmaan</p>
+          </div>
+          <div class="footer">
+            <p>This is an automated message. Please do not reply to this email.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const emailText = `
+Password Reset Request
+
+Dear ${displayName},
+
+We received a request to reset your password for your Nirmaan account.
+
+Use this link to reset your password:
+${resetLink}
+
+If you did not request this, you can ignore this email.
+
+After resetting, you can sign in at:
+${loginUrl}
+
+Thanks,
+Team Nirmaan
+    `;
+
+    await transporter.sendMail({
+      from: `"Nirmaan Pre-Incubation" <${process.env.GMAIL_USER}>`,
+      to: email,
+      subject: "Reset your Nirmaan password",
+      text: emailText,
+      html: emailHTML,
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    console.error("❌ Error sending forgot password email:", error);
     return { success: false, error: error.message };
   }
 }
@@ -364,6 +451,104 @@ router.put("/change-password", async (req: Request, res: Response) => {
     console.error("PUT /api/users/change-password error:", error);
     return res.status(500).json({
       error: "Failed to change password",
+      details: error.message,
+    });
+  }
+});
+
+/* =========================
+   POST /api/users/forgot-password
+   Send reset password email via SMTP
+========================= */
+router.post("/forgot-password", async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email || typeof email !== "string") {
+      return res.status(400).json({
+        error: "Email is required",
+      });
+    }
+
+    const emailNorm = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailNorm)) {
+      return res.status(400).json({
+        error: "Invalid email format",
+      });
+    }
+
+    const { data: userProfile, error: userLookupError } = await supabase
+      .from("user_profiles")
+      .select("full_name, email_address")
+      .ilike("email_address", emailNorm)
+      .maybeSingle();
+
+    if (userLookupError) {
+      return res.status(500).json({
+        error: "Failed to process forgot password request",
+        details: userLookupError.message,
+      });
+    }
+
+    if (!userProfile) {
+      return res.status(404).json({
+        error: "Email not exists",
+      });
+    }
+
+    const { data: generatedLinkData, error: generatedLinkError } =
+      await supabase.auth.admin.generateLink({
+        type: "recovery",
+        email: emailNorm,
+      });
+
+    if (generatedLinkError) {
+      console.error("Forgot password link generation error:", generatedLinkError);
+      return res.status(500).json({
+        error: "Failed to generate reset password link",
+        details: generatedLinkError.message,
+      });
+    }
+
+    const tokenHash = generatedLinkData?.properties?.hashed_token;
+    if (!tokenHash) {
+      return res.status(500).json({
+        error: "Failed to generate reset password link",
+      });
+    }
+
+    const appBaseUrl =
+      process.env.FRONTEND_URL ||
+      process.env.APP_URL ||
+      "http://localhost:3000";
+    const resetLink = `${appBaseUrl.replace(
+      /\/$/,
+      ""
+    )}/reset-password?token_hash=${encodeURIComponent(
+      tokenHash
+    )}&type=recovery`;
+
+    const emailResult = await sendForgotPasswordEmail(
+      emailNorm,
+      userProfile.full_name || "User",
+      resetLink
+    );
+
+    if (!emailResult.success) {
+      return res.status(500).json({
+        error: "Failed to send reset password email",
+        details: emailResult.error,
+      });
+    }
+
+    return res.status(200).json({
+      message: "Mail sent successfully",
+    });
+  } catch (error: any) {
+    console.error("POST /api/users/forgot-password error:", error);
+    return res.status(500).json({
+      error: "Failed to process forgot password request",
       details: error.message,
     });
   }
