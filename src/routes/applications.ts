@@ -8,6 +8,12 @@ const router = Router();
 const uuidRegex =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return "An unexpected error occurred";
+}
+
 /** Number of days after which a pending reviewer invite is auto-rejected */
 const REVIEWER_INVITE_EXPIRE_DAYS = 2;
 
@@ -93,6 +99,218 @@ const RESUME_TOKEN_EXPIRY_DAYS = 30;
 
 function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+type TeamMemberRow = Record<string, unknown>;
+
+function strField(v: unknown): string {
+  if (typeof v === "string") return v.trim();
+  if (v == null) return "";
+  return String(v).trim();
+}
+
+function parseTeamMembersFromApplication(raw: unknown): TeamMemberRow[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as TeamMemberRow[];
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed) ? (parsed as TeamMemberRow[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function isCoFounderMember(m: TeamMemberRow): boolean {
+  return m.isCoFounder === true || m.is_co_founder === true;
+}
+
+/** Prefer the row that represents the primary founder for Nirmaan academic_background. */
+function findFounderTeamMember(
+  members: TeamMemberRow[],
+  founderName: string,
+  founderEmail: string,
+): TeamMemberRow | null {
+  if (members.length === 0) return null;
+  const nameNorm = founderName.trim().toLowerCase();
+  const emailNorm = founderEmail.trim().toLowerCase();
+
+  if (emailNorm) {
+    const byEmail = members.find(
+      (m) => strField(m.email).toLowerCase() === emailNorm,
+    );
+    if (byEmail) return byEmail;
+  }
+  if (nameNorm) {
+    const byName = members.find(
+      (m) => strField(m.name).toLowerCase() === nameNorm,
+    );
+    if (byName) return byName;
+  }
+  const founderRole = members.find(
+    (m) => !isCoFounderMember(m) && /founder/i.test(strField(m.role)),
+  );
+  if (founderRole) return founderRole;
+
+  const nonCo = members.filter((m) => !isCoFounderMember(m));
+  if (nonCo.length >= 1) return nonCo[0];
+
+  return members[0];
+}
+
+/** Degree + department only, from the founder's team_members row (incubation apply form). */
+function academicBackgroundFromFounderTeamMember(
+  application: Record<string, unknown>,
+): string {
+  const members = parseTeamMembersFromApplication(application.team_members);
+  const founderName = strField(application.your_name || application.founder_name);
+  const founderEmail = strField(application.email);
+  const row = findFounderTeamMember(members, founderName, founderEmail);
+  if (!row) return "N/A";
+
+  const degree = strField(row.degree ?? row.Degree);
+  const department = strField(row.department ?? row.Department);
+  const parts = [degree, department].filter(Boolean);
+  return parts.length > 0 ? parts.join("/ ") : "N/A";
+}
+
+function parseFacultyInvolvedRows(raw: unknown): TeamMemberRow[] {
+  if (!raw) return [];
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (!t || /^na$/i.test(t) || /^n\/a$/i.test(t)) return [];
+    try {
+      const parsed = JSON.parse(t) as unknown;
+      return Array.isArray(parsed) ? (parsed as TeamMemberRow[]) : [];
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(raw)) return raw as TeamMemberRow[];
+  return [];
+}
+
+/** Nirmaan `official.role_of_faculty`: faculty name + role in startup only (from incubation faculty_involved). */
+function roleOfFacultyFromIncubation(application: Record<string, unknown>): string {
+  const rows = parseFacultyInvolvedRows(application.faculty_involved);
+  if (rows.length === 0) return "N/A";
+
+  const parts: string[] = [];
+  for (const row of rows) {
+    const name = strField(row.name ?? row.Name);
+    const roleInStartup = strField(
+      row.roleInStartup ?? row.role_in_startup ?? row.role_in_their_startup,
+    );
+    if (!name && !roleInStartup) continue;
+    if (name && roleInStartup) parts.push(`${name} — ${roleInStartup}`);
+    else if (name) parts.push(name);
+    else parts.push(roleInStartup);
+  }
+  return parts.length > 0 ? parts.join("; ") : "N/A";
+}
+
+function buildNirmaanStartupPayloadFromApplication(application: Record<string, unknown>) {
+  const teamName =
+    (application.team_name as string) ||
+    (application.company_name as string) ||
+    "Unnamed team";
+  const founderName =
+    (application.your_name as string) ||
+    (application.founder_name as string) ||
+    "Founder";
+  const founderEmail = (application.email as string) || "";
+  const founderPhone =
+    (application.phone_number as string) ||
+    (application.phone as string) ||
+    "";
+
+  return {
+    basic: {
+      startup_name: teamName,
+      startup_sector: "N/A",
+      startup_type: "N/A",
+      startup_domain: "N/A",
+      startup_industry: (application.target_industry as string) || "N/A",
+      startup_technology:
+      (application.solution_type as string) ||
+      (application.solution_type_other as string) ||
+      "N/A",
+      program: "Pratham",
+      startup_Community: "N/A",
+      startup_cohort: "Apr' 26",
+    },
+    official: {
+      official_contact_number: founderPhone || "N/A",
+      official_email_address: founderEmail,
+      website_link: (application.website as string) || "N/A",
+      linkedin_id: (application.linkedin as string) || "N/A",
+      role_of_faculty: roleOfFacultyFromIncubation(application),
+      mentor_associated: "N/A",
+      registration_number:"N/A",
+      dpiit_number: "N/A",
+      funding_stage: "N/A",
+      official_registered: "N/A",
+      pia_state: "Not signed",
+      scheme: "N/A",
+    },
+    founder: {
+      founder_name: founderName,
+      founder_email: founderEmail,
+      founder_number: founderPhone || "N/A",
+      founder_gender: "N/A",
+      founder_student_id: (application.roll_number as string) || "N/A",
+      academic_background: academicBackgroundFromFounderTeamMember(application),
+      linkedInid: (application.linkedin as string) || "N/A",
+    },
+    description: {
+      logo: "N/A",
+      startup_description:" ",
+    },
+  };
+}
+
+async function syncApprovedApplicationToNirmaan(application: Record<string, unknown>) {
+  const appYBaseUrl = process.env.APP_Y_API_URL?.trim();
+  if (!appYBaseUrl) {
+    return { success: false, error: "APP_Y_API_URL is not configured in incubation-backend" };
+  }
+
+  const founderEmail = ((application.email as string) || "").trim();
+  if (!founderEmail) {
+    return { success: false, error: "Application founder email is missing" };
+  }
+
+  const payload = buildNirmaanStartupPayloadFromApplication(application);
+  const secret = process.env.APP_Y_API_SECRET?.trim();
+  const response = await fetch(`${appYBaseUrl}/api/v1/sync/startup`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(secret
+        ? {
+            "x-api-key": secret,
+            "x-app-secret": secret,
+            Authorization: `Bearer ${secret}`,
+          }
+        : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return {
+      success: false,
+      error:
+        (data as { error?: string; message?: string }).error ||
+        (data as { error?: string; message?: string }).message ||
+        `Failed to sync startup to Nirmaan app (HTTP ${response.status})`,
+    };
+  }
+
+  return { success: true };
 }
 
 function buildDraftPayload(body: Record<string, unknown>) {
@@ -1257,6 +1475,88 @@ router.get("/:id", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("GET by ID error:", error);
     return res.status(500).json({ error: "Failed to fetch application" });
+  }
+});
+
+/* =========================
+  PUT /api/applications/:id/status
+  Backend status workflow:
+  - if approved => sync to Nirmaan first, then mark approved
+  - if rejected => store rejection_reason
+========================= */
+router.put("/:id/status", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const status = String(req.body?.status || "").trim();
+    const rejectionReason = req.body?.rejectionReason ?? null;
+
+    if (!id || !uuidRegex.test(id)) {
+      return res.status(400).json({ error: "Invalid application ID" });
+    }
+
+    if (status !== "approved" && status !== "rejected") {
+      return res.status(400).json({ error: "Status must be approved or rejected" });
+    }
+
+    if (status === "approved") {
+      const { data: appRow, error: appError } = await supabase
+        .from("new_application")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (appError || !appRow) {
+        return res.status(404).json({ error: "Application not found for approval sync" });
+      }
+
+      const syncResult = await syncApprovedApplicationToNirmaan(
+        appRow as Record<string, unknown>
+      );
+      if (!syncResult.success) {
+        return res.status(500).json({
+          error: "Failed to sync approved application to Nirmaan app",
+          details: syncResult.error,
+        });
+      }
+    }
+
+    const updateData: Record<string, unknown> = { status };
+    if (status === "rejected") {
+      updateData.rejection_reason =
+        typeof rejectionReason === "string" && rejectionReason.trim()
+          ? rejectionReason.trim()
+          : null;
+    } else {
+      updateData.rejection_reason = null;
+    }
+
+    const { error: updateError } = await supabase
+      .from("new_application")
+      .update(updateData)
+      .eq("id", id);
+
+    if (updateError) {
+      return res.status(500).json({
+        error: "Failed to update application status",
+        details: updateError.message,
+      });
+    }
+
+    const { data: updatedApplication } = await supabase
+      .from("new_application")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    return res.json({
+      message: "Application status updated successfully",
+      application: updatedApplication,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to process status update",
+      details: getErrorMessage(error),
+    });
   }
 });
 
